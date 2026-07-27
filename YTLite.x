@@ -442,6 +442,91 @@ static NSMutableArray *ytlFilteredSections(NSArray *array) {
 - (BOOL)queueClientGlobalConfigEnableFloatingPlaylistMinibar { return ytlBool(@"playlistOldMinibar") ? NO : %orig; }
 %end
 
+// ============================================================================
+// QUEUE — client-side "watch queue" (custom reimplementation)
+// ============================================================================
+// YouTube's native mobile queue is Premium-gated SERVER-SIDE: the "Add to queue"
+// button is delivered to non-Premium accounts as an upsell command (no client-side
+// queue action to hook), so it can't be unlocked. Instead we build our OWN queue:
+//   • long-press a video thumbnail in the feed → "Add to queue" (see ytlQueueLongPress)
+//   • the videoID is read straight out of the cell's thumbnail URL (i.ytimg.com/vi/<ID>/)
+//   • when a video finishes, we auto-play the next queued one (see YTPlayerViewController
+//     playbackControllerDidFinishPlayback:), reusing the app's vnd.youtube:// deep-link.
+// In-memory + deduped, like YouTube's own queue which also doesn't persist across launches.
+
+// Session queue of video IDs — in-memory, like YouTube's own queue which also doesn't
+// persist across launches. Thread-safe; deduped so a video isn't queued twice.
+@interface YTLQueueManager : NSObject
++ (instancetype)shared;
+- (BOOL)enqueue:(NSString *)videoID;   // NO if already present
+- (BOOL)contains:(NSString *)videoID;
+- (void)remove:(NSString *)videoID;
+- (NSString *)dequeue;                 // next video ID (removed), or nil if empty
+- (NSUInteger)count;
+- (void)clear;
+@end
+
+@implementation YTLQueueManager {
+    NSMutableArray<NSString *> *_ids;
+}
++ (instancetype)shared {
+    static YTLQueueManager *inst;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ inst = [YTLQueueManager new]; });
+    return inst;
+}
+- (instancetype)init { if ((self = [super init])) _ids = [NSMutableArray array]; return self; }
+- (BOOL)enqueue:(NSString *)videoID {
+    if (!videoID.length) return NO;
+    @synchronized (self) {
+        if ([_ids containsObject:videoID]) return NO;
+        [_ids addObject:videoID];
+    }
+    return YES;
+}
+- (BOOL)contains:(NSString *)videoID { @synchronized (self) { return videoID.length && [_ids containsObject:videoID]; } }
+- (void)remove:(NSString *)videoID { @synchronized (self) { if (videoID) [_ids removeObject:videoID]; } }
+- (NSString *)dequeue {
+    @synchronized (self) {
+        if (!_ids.count) return nil;
+        NSString *next = _ids.firstObject;
+        [_ids removeObjectAtIndex:0];
+        return next;
+    }
+}
+- (NSUInteger)count { @synchronized (self) { return _ids.count; } }
+- (void)clear { @synchronized (self) { [_ids removeAllObjects]; } }
+@end
+
+// Play a video by ID via the app's own deep-link handler (navigates to the watch page).
+static void ytlPlayVideoID(NSString *videoID) {
+    if (!videoID.length) return;
+    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"vnd.youtube://%@", videoID]];
+    if (url && [[UIApplication sharedApplication] canOpenURL:url])
+        [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+}
+
+// Pull the 11-char video ID out of a video-cell thumbnail URL, e.g.
+// https://i.ytimg.com/vi/<VIDEOID>/hq720.jpg  (also handles the /vi_webp/ variant).
+static NSString *ytlVideoIDFromThumbnailURL(NSURL *url) {
+    NSString *s = url.absoluteString;
+    if (!s.length) return nil;
+    for (NSString *marker in @[@"/vi/", @"/vi_webp/"]) {
+        NSRange m = [s rangeOfString:marker];
+        if (m.location == NSNotFound) continue;
+        NSUInteger start = m.location + m.length;
+        NSRange slash = [s rangeOfString:@"/" options:0 range:NSMakeRange(start, s.length - start)];
+        if (slash.location == NSNotFound) continue;
+        NSString *vid = [s substringWithRange:NSMakeRange(start, slash.location - start)];
+        // YouTube video IDs are 11 chars of [A-Za-z0-9_-].
+        if (vid.length == 11 &&
+            [vid rangeOfCharacterFromSet:[[NSCharacterSet characterSetWithCharactersInString:
+                @"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"] invertedSet]].location == NSNotFound)
+            return vid;
+    }
+    return nil;
+}
+
 // Remove Dark Background in Overlay
 %hook YTMainAppVideoPlayerOverlayView
 - (void)setBackgroundVisible:(BOOL)arg1 isGradientBackground:(BOOL)arg2 { ytlBool(@"noDarkBg") ? %orig(NO, arg2) : %orig; }
@@ -638,6 +723,15 @@ void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video
     if (ytlBool(@"shortsToRegular")) [self performSelector:@selector(shortsToRegular) withObject:nil afterDelay:0.75];
     if (ytlInt(@"autoSpeedIndex") != 3) [self performSelector:@selector(setAutoSpeed) withObject:nil afterDelay:0.75];
     if (ytlBool(@"disableAutoCaptions")) [self performSelector:@selector(turnOffCaptions) withObject:nil afterDelay:1.0];
+}
+
+// Queue auto-advance: when the current video finishes, play the next queued video (if any).
+// Fires regardless of the autoplay setting, so the queue drains even with autoplay off.
+- (void)playbackControllerDidFinishPlayback:(id)arg1 {
+    %orig;
+    if (!ytlBool(@"enableQueue") || ![YTLQueueManager shared].count) return;
+    NSString *next = [[YTLQueueManager shared] dequeue];
+    dispatch_async(dispatch_get_main_queue(), ^{ ytlPlayVideoID(next); });
 }
 
 %new
@@ -1300,15 +1394,21 @@ static void ytlConfigureLongPress(UILongPressGestureRecognizer *lp) {
     lp.delegate = [YTLGestureCoordinator shared];
 }
 
-// When our long-press menu opens, momentarily disable YouTube's own tap recognizers on the
-// cell so releasing the finger doesn't also fire the post-open navigation (cancelsTouchesInView
-// only stops touch-driven navs, not recognizer-driven ones). Re-enabled shortly after so
-// normal quick taps still open the post.
+// When one of our long-press menus opens, momentarily disable YouTube's own tap AND
+// long-press recognizers on the cell so (a) releasing the finger doesn't also fire the
+// post-open / video-open navigation (cancelsTouchesInView only stops touch-driven navs, not
+// recognizer-driven ones), and (b) YouTube's own long-press context menu doesn't pop up
+// alongside ours. Our own recognizers (named "YTL…") are left alone. Ours fires at 0.4s,
+// before YouTube's (~0.5s), so its recognizer is disabled before it can begin. Re-enabled
+// shortly after so normal quick taps / long-presses still work.
 static void ytlSuppressAncestorTaps(UIView *view) {
     NSMutableArray<UIGestureRecognizer *> *toReenable = [NSMutableArray array];
     for (UIView *v = view; v; v = v.superview) {
         for (UIGestureRecognizer *gr in v.gestureRecognizers) {
-            if (![gr.name hasPrefix:@"YTLPost"] && [gr isKindOfClass:[UITapGestureRecognizer class]] && gr.isEnabled) {
+            BOOL isOurs = [gr.name hasPrefix:@"YTL"];
+            BOOL isTapOrHold = [gr isKindOfClass:[UITapGestureRecognizer class]] ||
+                               [gr isKindOfClass:[UILongPressGestureRecognizer class]];
+            if (!isOurs && isTapOrHold && gr.isEnabled) {
                 gr.enabled = NO;
                 [toReenable addObject:gr];
             }
@@ -1327,9 +1427,16 @@ static void ytlDumpRecognizers(UIView *view, NSString *tag) {
     int level = 0;
     for (UIView *v = view; v; v = v.superview, level++) {
         for (UIGestureRecognizer *gr in v.gestureRecognizers) {
-            YTLDBG(@"recognizer[%@] L%d %@ name=%@ enabled=%d state=%ld view=%@",
+            NSMutableString *targets = [NSMutableString string];
+            @try {
+                for (id t in [gr valueForKey:@"_targets"]) {
+                    id target = [t valueForKey:@"_target"];
+                    if (target) [targets appendFormat:@"%@ ", NSStringFromClass([target class])];
+                }
+            } @catch (__unused id e) {}
+            YTLDBG(@"recognizer[%@] L%d %@ name=%@ enabled=%d state=%ld view=%@ targets=[%@]",
                    tag, level, NSStringFromClass([gr class]), gr.name ?: @"(nil)",
-                   gr.isEnabled, (long)gr.state, NSStringFromClass([v class]));
+                   gr.isEnabled, (long)gr.state, NSStringFromClass([v class]), targets);
         }
     }
 }
@@ -1864,6 +1971,7 @@ static BOOL ytlDescIsPost(NSString *desc) {
         NSString *trimmed = desc.length > 700 ? [desc substringToIndex:700] : desc;
         YTLDBG(@"keepalive post-like (match=%d): %@", ytlDescIsPost(desc) ? 1 : 0, trimmed);
     }
+
 #endif
 
     NSArray *gesturesInfo = @[
@@ -1896,6 +2004,21 @@ static BOOL ytlDescIsPost(NSString *desc) {
             UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(postManager:)];
             ytlConfigureLongPress(longPress);
             longPress.name = @"YTLPost";
+            [self addGestureRecognizer:longPress];
+        }
+    }
+
+    // Queue: attach a long-press to feed video cells (home/search use YTVideoWithContextNode)
+    // so it can offer "Add to queue". The videoID is read from the thumbnail URL at press time.
+    if (ytlBool(@"enableQueue") && [desc containsString:@"YTVideoWithContextNode"]) {
+        BOOL already = NO;
+        for (UIGestureRecognizer *gr in self.gestureRecognizers) {
+            if ([gr.name isEqualToString:@"YTLQueue"]) { already = YES; break; }
+        }
+        if (!already) {
+            UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(ytlQueueLongPress:)];
+            ytlConfigureLongPress(longPress);
+            longPress.name = @"YTLQueue";
             [self addGestureRecognizer:longPress];
         }
     }
@@ -1983,6 +2106,48 @@ static BOOL ytlDescIsPost(NSString *desc) {
     }]];
 
     [sheetController presentFromViewController:containerNode.closestViewController animated:YES completion:nil];
+}
+
+// Queue: long-press a feed video cell → "Add to queue" (or, if already queued,
+// "Remove from queue"), plus "Clear queue" when the queue is non-empty. The videoID comes
+// straight from the cell's thumbnail URL (i.ytimg.com/vi/<ID>/…). YouTube's own long-press
+// menu on these cells is AsyncDisplayKit-internal (fires only from a live gesture, so it can't
+// be re-triggered from here) — its actions remain available via the cell's ⋯ button.
+%new
+- (void)ytlQueueLongPress:(UILongPressGestureRecognizer *)sender {
+    if (sender.state != UIGestureRecognizerStateBegan) return;
+    if (ytlEnclosingScrollActive(self)) return; // ignore holds that begin a scroll
+
+    ytlSuppressAncestorTaps(self); // our menu wins — suppress the cell's tap + native long-press
+
+    NSURL *thumb = ytlImageURLForView(self, [sender locationInView:self])
+                   ?: findImageURLInNode((ASDisplayNode *)self.keepalive_node, 0);
+    NSString *videoID = ytlVideoIDFromThumbnailURL(thumb);
+    if (!videoID.length) return;
+
+    YTLQueueManager *q = [YTLQueueManager shared];
+    id responder = [%c(YTUIUtils) topViewControllerForPresenting];
+    YTDefaultSheetController *sheet = [%c(YTDefaultSheetController) sheetControllerWithParentResponder:nil];
+
+    if ([q contains:videoID]) {
+        [sheet addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"RemoveFromQueue") iconImage:YTImageNamed(@"yt_outline_list_remove_24pt") style:0 handler:^ {
+            [q remove:videoID];
+        }]];
+    } else {
+        [sheet addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"AddToQueue") iconImage:YTImageNamed(@"yt_outline_list_queue_24pt") style:0 handler:^ {
+            [q enqueue:videoID];
+            NSString *msg = [NSString stringWithFormat:@"%@ (%lu)", LOC(@"AddedToQueue"), (unsigned long)q.count];
+            [[%c(YTToastResponderEvent) eventWithMessage:msg firstResponder:responder] send];
+        }]];
+    }
+
+    if (q.count) {
+        [sheet addAction:[%c(YTActionSheetAction) actionWithTitle:[NSString stringWithFormat:@"%@ (%lu)", LOC(@"ClearQueue"), (unsigned long)q.count] iconImage:YTImageNamed(@"yt_outline_trash_can_24pt") style:0 handler:^ {
+            [q clear];
+        }]];
+    }
+
+    [sheet presentFromViewController:responder animated:YES completion:nil];
 }
 
 %new
