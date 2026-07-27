@@ -63,6 +63,9 @@
 "AddedToQueue" = "Added to queue";
 "RemoveFromQueue" = "Remove from queue";
 "ClearQueue" = "Clear queue";
+"ViewQueue" = "View queue";
+"Queue" = "Queue";
+"TapToPlay" = "Tap to play";
 "PortraitFullscreen" = "Portrait fullscreen mode";
 "PortraitFullscreenDesc" = "Enables portrait fullscreen mode support.";
 "CopyWithTimestamp" = "Copy timestamped links";

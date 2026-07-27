@@ -470,6 +470,8 @@ static NSMutableArray *ytlFilteredSections(NSArray *array) {
 - (NSString *)dequeue;                 // next video ID (removed), or nil if empty
 - (NSUInteger)count;
 - (void)clear;
+- (NSArray<NSString *> *)allVideoIDs;  // ordered snapshot (for the viewer)
+- (void)removeThroughIndex:(NSUInteger)idx;   // drop items 0…idx inclusive
 @end
 
 @implementation YTLQueueManager {
@@ -502,6 +504,13 @@ static NSMutableArray *ytlFilteredSections(NSArray *array) {
 }
 - (NSUInteger)count { @synchronized (self) { return _ids.count; } }
 - (void)clear { @synchronized (self) { [_ids removeAllObjects]; } }
+- (NSArray<NSString *> *)allVideoIDs { @synchronized (self) { return [_ids copy]; } }
+- (void)removeThroughIndex:(NSUInteger)idx {
+    @synchronized (self) {
+        if (idx >= _ids.count) { [_ids removeAllObjects]; return; }
+        [_ids removeObjectsInRange:NSMakeRange(0, idx + 1)];
+    }
+}
 @end
 
 // Play a video by ID via the app's own deep-link handler (navigates to the watch page).
@@ -532,6 +541,120 @@ static NSString *ytlVideoIDFromThumbnailURL(NSURL *url) {
     }
     return nil;
 }
+
+// Queue viewer: a modal list of the queued videos (thumbnail + title). Tap a row to play it
+// (dropping the ones queued before it), swipe to remove one, or Clear to empty. Titles are
+// fetched lazily via YouTube's public oEmbed endpoint; thumbnails from i.ytimg.com. Opened
+// from the long-press "View queue" action.
+@interface YTLQueueViewController : UIViewController <UITableViewDataSource, UITableViewDelegate>
+@end
+
+@implementation YTLQueueViewController {
+    UITableView *_table;
+    NSMutableArray<NSString *> *_items;
+    NSMutableDictionary<NSString *, NSString *> *_titles;   // videoID → title
+    NSMutableDictionary<NSString *, UIImage *> *_thumbs;    // videoID → thumbnail
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    _items = [[[YTLQueueManager shared] allVideoIDs] mutableCopy];
+    _titles = [NSMutableDictionary dictionary];
+    _thumbs = [NSMutableDictionary dictionary];
+    self.view.backgroundColor = [UIColor systemBackgroundColor];
+    [self updateTitle];
+
+    self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(ytlDone)];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:LOC(@"ClearQueue") style:UIBarButtonItemStylePlain target:self action:@selector(ytlClearAll)];
+
+    _table = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStylePlain];
+    _table.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    _table.dataSource = self;
+    _table.delegate = self;
+    _table.rowHeight = 76;
+    [self.view addSubview:_table];
+
+    for (NSString *vid in _items) [self fetchTitleFor:vid];
+}
+
+- (void)updateTitle { self.title = [NSString stringWithFormat:@"%@ (%lu)", LOC(@"Queue"), (unsigned long)_items.count]; }
+- (void)ytlDone { [self dismissViewControllerAnimated:YES completion:nil]; }
+- (void)ytlClearAll {
+    [[YTLQueueManager shared] clear];
+    [_items removeAllObjects];
+    [_table reloadData];
+    [self updateTitle];
+}
+
+- (void)fetchTitleFor:(NSString *)videoID {
+    if (_titles[videoID]) return;
+    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"https://www.youtube.com/oembed?url=https://youtu.be/%@&format=json", videoID]];
+    if (!url) return;
+    __weak typeof(self) ws = self;
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
+        if (!data) return;
+        NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        NSString *title = [json isKindOfClass:[NSDictionary class]] ? json[@"title"] : nil;
+        if (![title isKindOfClass:[NSString class]] || !title.length) return;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong typeof(ws) ss = ws; if (!ss) return;
+            ss->_titles[videoID] = title;
+            [ss->_table reloadData];
+        });
+    }];
+    [task resume];
+}
+
+- (void)loadThumbFor:(NSString *)videoID atIndexPath:(NSIndexPath *)ip {
+    __weak typeof(self) ws = self;
+    NSURL *thumb = [NSURL URLWithString:[NSString stringWithFormat:@"https://i.ytimg.com/vi/%@/hqdefault.jpg", videoID]];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        NSData *d = thumb ? [NSData dataWithContentsOfURL:thumb] : nil;
+        UIImage *raw = d ? [UIImage imageWithData:d] : nil;
+        if (!raw) return;
+        // Downscale to a cell-sized thumbnail (the default cell imageView won't shrink a huge one).
+        CGSize target = CGSizeMake(120, 68);
+        UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:target];
+        UIImage *small = [r imageWithActions:^(UIGraphicsImageRendererContext *ctx) { [raw drawInRect:CGRectMake(0, 0, target.width, target.height)]; }];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong typeof(ws) ss = ws; if (!ss) return;
+            ss->_thumbs[videoID] = small;
+            UITableViewCell *c = [ss->_table cellForRowAtIndexPath:ip];
+            if (c) { c.imageView.image = small; [c setNeedsLayout]; }
+        });
+    });
+}
+
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return _items.count; }
+
+- (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
+    UITableViewCell *cell = [tv dequeueReusableCellWithIdentifier:@"q"];
+    if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"q"];
+    NSString *vid = _items[ip.row];
+    cell.textLabel.numberOfLines = 2;
+    cell.textLabel.text = _titles[vid] ?: vid;
+    cell.detailTextLabel.text = LOC(@"TapToPlay");
+    UIImage *cached = _thumbs[vid];
+    cell.imageView.image = cached;
+    if (!cached) [self loadThumbFor:vid atIndexPath:ip];
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
+    [tv deselectRowAtIndexPath:ip animated:YES];
+    NSString *vid = _items[ip.row];
+    [[YTLQueueManager shared] removeThroughIndex:ip.row]; // playing this one skips the ones before it
+    [self dismissViewControllerAnimated:YES completion:^{ ytlPlayVideoID(vid); }];
+}
+
+- (void)tableView:(UITableView *)tv commitEditingStyle:(UITableViewCellEditingStyle)style forRowAtIndexPath:(NSIndexPath *)ip {
+    if (style != UITableViewCellEditingStyleDelete) return;
+    [[YTLQueueManager shared] remove:_items[ip.row]];
+    [_items removeObjectAtIndex:ip.row];
+    [tv deleteRowsAtIndexPaths:@[ip] withRowAnimation:UITableViewRowAnimationAutomatic];
+    [self updateTitle];
+}
+@end
 
 // Remove Dark Background in Overlay
 %hook YTMainAppVideoPlayerOverlayView
@@ -2148,8 +2271,10 @@ static BOOL ytlDescIsPost(NSString *desc) {
     }
 
     if (q.count) {
-        [sheet addAction:[%c(YTActionSheetAction) actionWithTitle:[NSString stringWithFormat:@"%@ (%lu)", LOC(@"ClearQueue"), (unsigned long)q.count] iconImage:YTImageNamed(@"yt_outline_trash_can_24pt") style:0 handler:^ {
-            [q clear];
+        [sheet addAction:[%c(YTActionSheetAction) actionWithTitle:[NSString stringWithFormat:@"%@ (%lu)", LOC(@"ViewQueue"), (unsigned long)q.count] iconImage:YTImageNamed(@"yt_outline_list_view_24pt") style:0 handler:^ {
+            YTLQueueViewController *vc = [YTLQueueViewController new];
+            UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+            [[%c(YTUIUtils) topViewControllerForPresenting] presentViewController:nav animated:YES completion:nil];
         }]];
     }
 
