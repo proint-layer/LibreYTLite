@@ -1276,6 +1276,16 @@ static void genImageFromLayer(CALayer *layer, UIColor *backgroundColor, void (^c
     return inst;
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other { return YES; }
+
+// Make single-tap recognizers (YouTube's post-cell "open detail" nav) wait for our
+// long-press to fail. When the long-press recognizes (menu opens) it never fails, so the
+// tap never fires and we don't navigate on finger-lift. A quick tap fails the long-press
+// instantly, so normal tap-to-open-post still works. Scoped to tap-vs-long-press only, so
+// pans/pinches/other long-presses are untouched and scrolling stays responsive.
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)other {
+    return [g isKindOfClass:[UILongPressGestureRecognizer class]] &&
+           [other isKindOfClass:[UITapGestureRecognizer class]];
+}
 @end
 
 // Configures an injected long-press. cancelsTouchesInView=YES so that when the press is
@@ -1308,6 +1318,22 @@ static void ytlSuppressAncestorTaps(UIView *view) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ for (UIGestureRecognizer *r in toReenable) r.enabled = YES; });
 }
+
+#if defined(YTL_POST_DEBUG)
+// Diagnostic: dump every gesture recognizer on `view` and each ancestor so we can see what
+// actually drives the post-open navigation (class, name, enabled, state). Called before and
+// after ytlSuppressAncestorTaps to confirm which recognizers we did/didn't disable.
+static void ytlDumpRecognizers(UIView *view, NSString *tag) {
+    int level = 0;
+    for (UIView *v = view; v; v = v.superview, level++) {
+        for (UIGestureRecognizer *gr in v.gestureRecognizers) {
+            YTLDBG(@"recognizer[%@] L%d %@ name=%@ enabled=%d state=%ld view=%@",
+                   tag, level, NSStringFromClass([gr class]), gr.name ?: @"(nil)",
+                   gr.isEnabled, (long)gr.state, NSStringFromClass([v class]));
+        }
+    }
+}
+#endif
 
 // YES if an enclosing scroll view is actively moving — used to ignore taps/long-presses
 // that are really part of a scroll (e.g. tapping to stop a decelerating feed).
@@ -1916,7 +1942,13 @@ static BOOL ytlDescIsPost(NSString *desc) {
 - (void)postManager:(UILongPressGestureRecognizer *)sender {
     if (sender.state != UIGestureRecognizerStateBegan) return;
     if (ytlEnclosingScrollActive(self)) return; // ignore holds that begin a scroll
+#if defined(YTL_POST_DEBUG)
+    ytlDumpRecognizers(self, @"before");
+#endif
     ytlSuppressAncestorTaps(self); // don't let the finger-lift also open the post
+#if defined(YTL_POST_DEBUG)
+    ytlDumpRecognizers(self, @"after");
+#endif
     ELMContainerNode *containerNode = (ELMContainerNode *)self.keepalive_node;
     NSString *text = containerNode.copiedComment;
     // The image under the finger — the long-press location is valid because the touch is
