@@ -1278,13 +1278,35 @@ static void genImageFromLayer(CALayer *layer, UIColor *backgroundColor, void (^c
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other { return YES; }
 @end
 
-// Configures an injected long-press so it never eats a native single-tap.
+// Configures an injected long-press. cancelsTouchesInView=YES so that when the press is
+// recognized (menu opens), the underlying touch is cancelled — otherwise lifting the finger
+// fires YouTube's cell-tap and navigates behind the menu. (A quick tap never recognizes the
+// long-press, so tap-to-open-post is unaffected.)
 static void ytlConfigureLongPress(UILongPressGestureRecognizer *lp) {
     lp.minimumPressDuration = 0.4;
-    lp.cancelsTouchesInView = NO;
+    lp.cancelsTouchesInView = YES;
     lp.delaysTouchesBegan = NO;
     lp.delaysTouchesEnded = NO;
     lp.delegate = [YTLGestureCoordinator shared];
+}
+
+// When our long-press menu opens, momentarily disable YouTube's own tap recognizers on the
+// cell so releasing the finger doesn't also fire the post-open navigation (cancelsTouchesInView
+// only stops touch-driven navs, not recognizer-driven ones). Re-enabled shortly after so
+// normal quick taps still open the post.
+static void ytlSuppressAncestorTaps(UIView *view) {
+    NSMutableArray<UIGestureRecognizer *> *toReenable = [NSMutableArray array];
+    for (UIView *v = view; v; v = v.superview) {
+        for (UIGestureRecognizer *gr in v.gestureRecognizers) {
+            if (![gr.name hasPrefix:@"YTLPost"] && [gr isKindOfClass:[UITapGestureRecognizer class]] && gr.isEnabled) {
+                gr.enabled = NO;
+                [toReenable addObject:gr];
+            }
+        }
+    }
+    if (toReenable.count)
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ for (UIGestureRecognizer *r in toReenable) r.enabled = YES; });
 }
 
 // YES if an enclosing scroll view is actively moving — used to ignore taps/long-presses
@@ -1894,6 +1916,7 @@ static BOOL ytlDescIsPost(NSString *desc) {
 - (void)postManager:(UILongPressGestureRecognizer *)sender {
     if (sender.state != UIGestureRecognizerStateBegan) return;
     if (ytlEnclosingScrollActive(self)) return; // ignore holds that begin a scroll
+    ytlSuppressAncestorTaps(self); // don't let the finger-lift also open the post
     ELMContainerNode *containerNode = (ELMContainerNode *)self.keepalive_node;
     NSString *text = containerNode.copiedComment;
     // The image under the finger — the long-press location is valid because the touch is
