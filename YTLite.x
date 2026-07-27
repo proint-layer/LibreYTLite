@@ -85,6 +85,12 @@ static void ytlScanAndCacheImages(NSData *data) {
 %hook YTIPlayerResponse
 - (BOOL)isMonetized { return ytlBool(@"noAds") ? NO : YES; }
 - (NSMutableArray *)playerAdsArray { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; }
+// Player-response ads ride THREE separate arrays; stripping only playerAdsArray leaves the
+// newer ad-placement / ad-slot path (DAI, 6s bumpers) intact — those occasionally slip through
+// as an "ad placement" / "ad slot" rather than a player ad. Empty them all (an empty ad array
+// is always valid).
+- (NSMutableArray *)adPlacementsArray { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; }
+- (NSMutableArray *)adSlotsArray { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; }
 %end
 
 %hook YTDataUtils
