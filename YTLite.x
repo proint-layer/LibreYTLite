@@ -1262,6 +1262,8 @@ static void genImageFromLayer(CALayer *layer, UIColor *backgroundColor, void (^c
 // native single-tap (swipe survives because the carousel pan is on an ancestor
 // scroll view). This delegate permits simultaneous recognition so our long-press
 // coexists with — never blocks — the native tap.
+// Shared delegate for our injected long-press recognizers: permits simultaneous
+// recognition so they coexist with YouTube's own gestures rather than blocking them.
 @interface YTLGestureCoordinator : NSObject <UIGestureRecognizerDelegate>
 + (instancetype)shared;
 @end
@@ -1785,14 +1787,17 @@ static void ytlPresentGallery(NSURL *tapped, UIViewController *host) {
     [YTLImageViewer presentWithURLs:all index:idx from:host];
 }
 
-// Community-post container identifiers vary by YouTube build. Match a broadened set
-// so the feature survives identifier renames (original_post -> post_base_wrapper, etc.).
+// Matches the post CONTENT container(s) — not the backstage action buttons
+// (post_menu_button / comment_button / like_button / dislike_button, which also contain
+// "backstage"). YouTube added an outer "id.ui.backstage.post" wrapper alongside the older
+// "id.ui.backstage.original_post"; the identifier is printed as "…post>"/"…original_post>"
+// in the node description, so we match with the trailing '>' to exclude the "…post_*" buttons.
 static BOOL ytlDescIsPost(NSString *desc) {
     if (!desc) return NO;
-    return [desc containsString:@"id.ui.backstage.original_post"] ||
+    return [desc containsString:@"id.ui.backstage.post>"] ||
+           [desc containsString:@"id.ui.backstage.original_post>"] ||
            [desc containsString:@"post_base_wrapper"] ||
-           [desc containsString:@"sharedpost"] ||
-           [desc containsString:@"backstage"];
+           [desc containsString:@"sharedpost"];
 }
 
 %hook _ASDisplayView
@@ -1802,14 +1807,14 @@ static BOOL ytlDescIsPost(NSString *desc) {
     NSString *desc = [self description];
 
 #if defined(YTL_POST_DEBUG)
-    // Diagnostic: surface the real runtime identifiers of post/comment/image views so
-    // we can confirm what a community post actually looks like on this build.
+    // Diagnostic: surface the real runtime identifier of post-like feed cells and whether
+    // ytlDescIsPost() still matches them (so we can tell a matcher miss from a URL miss).
     if (ytlBool(@"postManager") &&
-        ([desc rangeOfString:@"post" options:NSCaseInsensitiveSearch].location != NSNotFound ||
-         [desc rangeOfString:@"backstage" options:NSCaseInsensitiveSearch].location != NSNotFound ||
-         [desc rangeOfString:@"image" options:NSCaseInsensitiveSearch].location != NSNotFound)) {
+        ([desc rangeOfString:@"backstage" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+         [desc rangeOfString:@"post" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+         [desc rangeOfString:@"shared" options:NSCaseInsensitiveSearch].location != NSNotFound)) {
         NSString *trimmed = desc.length > 700 ? [desc substringToIndex:700] : desc;
-        YTLDBG(@"keepalive view: %@", trimmed);
+        YTLDBG(@"keepalive post-like (match=%d): %@", ytlDescIsPost(desc) ? 1 : 0, trimmed);
     }
 #endif
 
@@ -1829,51 +1834,23 @@ static BOOL ytlDescIsPost(NSString *desc) {
         }
     }
 
-    // Community post: attach BOTH the long-press action menu and the tap-to-open viewer.
-    // Coordinated so they never suppress native taps; handlers no-op off-image.
+    // Community post: attach the long-press action menu (Open Image / Save / Copy). We
+    // deliberately do NOT hook the tap — YouTube's feed now opens the post detail on a cell
+    // tap (a lazily-added recognizer on the "id.ui.backstage.post" wrapper), and fighting it
+    // is unreliable; the paid YTLite 5.x also opens its viewer from this long-press menu.
     if (ytlBool(@"postManager") && ytlDescIsPost(desc)) {
-        // setKeepalive_node: is called repeatedly on reused cells; only attach once per
-        // view or the recognizers stack and each tap fires (and presents) N times.
+        // setKeepalive_node: is called repeatedly on reused cells; only attach once per view.
         BOOL already = NO;
         for (UIGestureRecognizer *gr in self.gestureRecognizers) {
             if ([gr.name isEqualToString:@"YTLPost"]) { already = YES; break; }
         }
         if (!already) {
-#if defined(YTL_POST_DEBUG)
-            YTLDBG(@"attaching post gestures to: %@", (desc.length > 200 ? [desc substringToIndex:200] : desc));
-#endif
             UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(postManager:)];
             ytlConfigureLongPress(longPress);
             longPress.name = @"YTLPost";
             [self addGestureRecognizer:longPress];
-
-            UITapGestureRecognizer *imageTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(postImageTap:)];
-            imageTap.cancelsTouchesInView = NO;
-            imageTap.delaysTouchesBegan = NO;
-            imageTap.delaysTouchesEnded = NO;
-            imageTap.delegate = [YTLGestureCoordinator shared];
-            imageTap.name = @"YTLPost";
-            // Don't let a long-press also count as a tap — the tap only fires if the
-            // long-press fails (i.e. a genuine quick tap).
-            [imageTap requireGestureRecognizerToFail:longPress];
-            [self addGestureRecognizer:imageTap];
         }
     }
-}
-
-%new
-- (void)postImageTap:(UITapGestureRecognizer *)sender {
-    if (sender.state != UIGestureRecognizerStateEnded) return;
-    if (ytlEnclosingScrollActive(self)) return; // ignore taps that are part of a scroll
-    CGPoint point = [sender locationInView:self];
-    NSURL *url = ytlImageURLForView(self, point);
-#if defined(YTL_POST_DEBUG)
-    UIView *hv = [self hitTest:point withEvent:nil];
-    YTLDBG(@"postImageTap at {%.0f,%.0f} hit=%@ -> url=%@", point.x, point.y,
-           hv ? NSStringFromClass([hv class]) : @"nil", url.absoluteString ?: @"(none)");
-#endif
-    if (!url) return;
-    ytlPresentGallery(url, self.keepalive_node.closestViewController);
 }
 
 %new
@@ -1915,63 +1892,42 @@ static BOOL ytlDescIsPost(NSString *desc) {
 
 %new
 - (void)postManager:(UILongPressGestureRecognizer *)sender {
-    if (sender.state == UIGestureRecognizerStateBegan) {
-        if (ytlEnclosingScrollActive(self)) return; // ignore holds that begin a scroll
-        ELMContainerNode *nodeForLayer = (ELMContainerNode *)self.keepalive_node.yogaChildren[0];
-        ELMContainerNode *containerNode = (ELMContainerNode *)self.keepalive_node;
-        NSString *text = containerNode.copiedComment;
-        // Resolve the image under the finger first (works in the community carousel where
-        // the image is in a nested cell), then fall back to captured/first-in-subtree URL.
-        NSURL *URL = ytlImageURLForView(self, [sender locationInView:self])
-                     ?: containerNode.copiedURL
-                     ?: findImageURLInNode((ASDisplayNode *)containerNode, 0);
-        CALayer *layer = nodeForLayer.layer;
-        UIColor *backgroundColor = containerNode.closestViewController.view.backgroundColor;
+    if (sender.state != UIGestureRecognizerStateBegan) return;
+    if (ytlEnclosingScrollActive(self)) return; // ignore holds that begin a scroll
+    ELMContainerNode *containerNode = (ELMContainerNode *)self.keepalive_node;
+    NSString *text = containerNode.copiedComment;
+    // The image under the finger — the long-press location is valid because the touch is
+    // still down. Fall back to a captured URL, then the first image in the post's subtree.
+    NSURL *URL = ytlImageURLForView(self, [sender locationInView:self])
+                 ?: containerNode.copiedURL
+                 ?: findImageURLInNode((ASDisplayNode *)containerNode, 0);
 
-        YTDefaultSheetController *sheetController = [%c(YTDefaultSheetController) sheetControllerWithParentResponder:nil];
+    YTDefaultSheetController *sheetController = [%c(YTDefaultSheetController) sheetControllerWithParentResponder:nil];
 
-        [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"CopyPostText") iconImage:YTImageNamed(@"yt_outline_message_bubble_right_24pt") style:0 handler:^ {
-            if (text) {
-                [UIPasteboard generalPasteboard].string = text;
-                [[%c(YTToastResponderEvent) eventWithMessage:LOC(@"Copied") firstResponder:containerNode.closestViewController] send];
-            }
+    if (URL) {
+        // Open the actual full-resolution attached image (paged gallery for multi-image
+        // posts) — not a screenshot of the post.
+        [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:@"Open Image" iconImage:YTImageNamed(@"yt_outline_image_24pt") style:0 handler:^ {
+            ytlPresentGallery(URL, containerNode.closestViewController);
         }]];
 
-        if (URL) {
-            [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:@"Open Image" iconImage:YTImageNamed(@"yt_outline_youtube_search_24pt") style:0 handler:^ {
-                ytlPresentGallery(URL, containerNode.closestViewController);
-            }]];
-
-            [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"SaveCurrentImage") iconImage:YTImageNamed(@"yt_outline_image_24pt") style:0 handler:^ {
-                downloadImageFromURL(containerNode.closestViewController, URL, YES);
-            }]];
-
-            [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"CopyCurrentImage") iconImage:YTImageNamed(@"yt_outline_library_image_24pt") style:0 handler:^ {
-                downloadImageFromURL(containerNode.closestViewController, URL, NO);
-            }]];
-        }
-
-        [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"SavePostAsImage") titleColor:[UIColor colorWithRed:0.75 green:0.50 blue:0.90 alpha:1.0] iconImage:YTImageNamed(@"yt_outline_image_24pt") iconColor:[UIColor colorWithRed:0.75 green:0.50 blue:0.90 alpha:1.0] disableAutomaticButtonColor:YES accessibilityIdentifier:nil handler:^ {
-            genImageFromLayer(layer, backgroundColor, ^(UIImage *image) {
-                [[PHPhotoLibrary sharedPhotoLibrary] performChanges:^{
-                    PHAssetCreationRequest *request = [PHAssetCreationRequest creationRequestForAssetFromImage:image];
-                    request.creationDate = [NSDate date];
-                } completionHandler:^(BOOL success, NSError *error) {
-                    NSString *message = success ? LOC(@"Saved") : [NSString stringWithFormat:LOC(@"%@: %@"), LOC(@"Error"), error.localizedDescription];
-                    [[%c(YTToastResponderEvent) eventWithMessage:message firstResponder:containerNode.closestViewController] send];
-                }];
-            });
+        [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"SaveCurrentImage") iconImage:YTImageNamed(@"yt_outline_image_24pt") style:0 handler:^ {
+            downloadImageFromURL(containerNode.closestViewController, URL, YES);
         }]];
 
-        [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"CopyPostAsImage") titleColor:[UIColor colorWithRed:0.75 green:0.50 blue:0.90 alpha:1.0] iconImage:YTImageNamed(@"yt_outline_library_image_24pt") iconColor:[UIColor colorWithRed:0.75 green:0.50 blue:0.90 alpha:1.0] disableAutomaticButtonColor:YES accessibilityIdentifier:nil handler:^ {
-            genImageFromLayer(layer, backgroundColor, ^(UIImage *image) {
-                [UIPasteboard generalPasteboard].image = image;
-                [[%c(YTToastResponderEvent) eventWithMessage:LOC(@"Copied") firstResponder:containerNode.closestViewController] send];
-            });
+        [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"CopyCurrentImage") iconImage:YTImageNamed(@"yt_outline_library_image_24pt") style:0 handler:^ {
+            downloadImageFromURL(containerNode.closestViewController, URL, NO);
         }]];
-
-        [sheetController presentFromViewController:containerNode.closestViewController animated:YES completion:nil];
     }
+
+    [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"CopyPostText") iconImage:YTImageNamed(@"yt_outline_message_bubble_right_24pt") style:0 handler:^ {
+        if (text) {
+            [UIPasteboard generalPasteboard].string = text;
+            [[%c(YTToastResponderEvent) eventWithMessage:LOC(@"Copied") firstResponder:containerNode.closestViewController] send];
+        }
+    }]];
+
+    [sheetController presentFromViewController:containerNode.closestViewController animated:YES completion:nil];
 }
 
 %new
