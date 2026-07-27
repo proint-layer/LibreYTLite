@@ -14,10 +14,13 @@ static UIImage *YTImageNamed(NSString *imageName) {
 }
 
 // --- Multi-image community post cache ------------------------------------------------
-// A multi-image post's attachment is an EML elementRenderer whose bytes embed all its
-// image URLs, but those images render lazily so they're unreachable from the view tree at
-// tap time. We capture the ordered URL group at FEED time (in the YTIElementRenderer
-// elementData hook) and look it up when an image is tapped to page the whole set.
+// A post with a swipeable gallery is one EML element whose bytes list every image URL.
+// Trouble is, the extra images render LAZILY -- at the moment you tap, only the first one
+// exists in the view tree, so you can't find the rest by walking views. The dodge: the raw
+// element bytes already hold all of them at FEED time. So we scan those bytes once as they
+// go by (in the elementData hook), stash the ordered URL group, and when a post image is
+// tapped we look the group up and page the whole set. Ugly, but it's the only place the
+// full list is ever sitting in one piece.
 static NSString *ytMaxResURLString(NSString *urlString);
 static void ytlAddPhotoURLsFromString(NSString *s, NSMutableArray<NSURL *> *out);
 
@@ -81,23 +84,27 @@ static void ytlScanAndCacheImages(NSData *data) {
 - (BOOL)playableInBackground { return ytlBool(@"backgroundPlayback") ? YES : NO; }
 %end
 
-// Disable Ads
+// Kill ads. Video ads live on the player response, and they ride THREE
+// separate arrays -- not one. We used to empty only playerAdsArray and the
+// odd 6s bumper still snuck through as an "ad placement" or "ad slot" instead.
+// So empty all three. An empty ad array is always valid; nothing downstream
+// gets upset about it.
 %hook YTIPlayerResponse
-- (BOOL)isMonetized { return ytlBool(@"noAds") ? NO : YES; }
-- (NSMutableArray *)playerAdsArray { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; }
-// Player-response ads ride THREE separate arrays; stripping only playerAdsArray leaves the
-// newer ad-placement / ad-slot path (DAI, 6s bumpers) intact — those occasionally slip through
-// as an "ad placement" / "ad slot" rather than a player ad. Empty them all (an empty ad array
-// is always valid).
-- (NSMutableArray *)adPlacementsArray { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; }
-- (NSMutableArray *)adSlotsArray { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; }
+- (BOOL)isMonetized { return ytlBool(@"noAds") ? NO : YES; } // Tell the app the video isn't monetized.
+- (NSMutableArray *)playerAdsArray    { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; }
+- (NSMutableArray *)adPlacementsArray { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; } // DAI / bumpers hide here.
+- (NSMutableArray *)adSlotsArray      { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; } // ...and here too.
 %end
 
+// Spam signals are the fingerprinting blob the app ships with ad requests.
+// Hand back nil and it stops asking about ads with our device in tow.
 %hook YTDataUtils
 + (id)spamSignalsDictionary { return ytlBool(@"noAds") ? nil : %orig; }
 + (id)spamSignalsDictionaryWithoutIDFA { return ytlBool(@"noAds") ? nil : %orig; }
 %end
 
+// These two stamp ad context onto every InnerTube request. Skip %orig and the
+// request goes out clean -- no ad context, so the server has less to serve against.
 %hook YTAdsInnerTubeContextDecorator
 - (void)decorateContext:(id)context { if (!ytlBool(@"noAds")) %orig; }
 %end
@@ -107,29 +114,37 @@ static void ytlScanAndCacheImages(NSData *data) {
 %end
 
 %hook YTPlaybackConfig
-- (void)setEnablePlayerAdUIRendering:(BOOL)enable { %orig(ytlBool(@"noAds") ? NO : enable); }
+- (void)setEnablePlayerAdUIRendering:(BOOL)enable { %orig(ytlBool(@"noAds") ? NO : enable); } // Don't even build the ad UI.
 %end
 
+// Belt and suspenders: if an ad break ever does start, swallow it. skipAd is
+// the "skip" button's guts -- no-op it too so a stray break can't wedge.
 %hook YTAdController
 - (void)startAdBreak:(id)arg1 { if (!ytlBool(@"noAds")) %orig; }
 - (void)skipAd { if (!ytlBool(@"noAds")) %orig; }
 %end
 
+// elementData is the raw bytes for one EML feed element. It's called on EVERY
+// nested renderer, not just section roots -- keep that in mind below, it bites.
 %hook YTIElementRenderer
 - (NSData *)elementData {
     NSData *orig = %orig;
 
-    // Feed-time capture of multi-image community-post image groups (see cache above).
+    // We're already looking at every element's bytes, so this is a free ride:
+    // scan here to cache multi-image community-post URL groups (see cache up top).
     if (ytlBool(@"postManager")) ytlScanAndCacheImages(orig);
 
+    // hasAdLoggingData is the app's own "this is an ad" tell. Trust it -- nil out
+    // the whole element and the ad never renders.
     if (ytlBool(@"noAds") && self.hasCompatibilityOptions && self.compatibilityOptions.hasAdLoggingData)
         return nil;
 
     NSString *description = [self description];
 
-    // Only unambiguously ad-specific identifiers — generic layout names like square_image_layout,
-    // carousel_headered_layout, text_image_button_layout are shared with community post sub-renderers
-    // and must not appear here (elementData is called on every nested renderer, not just section roots).
+    // WARNING: only match UNAMBIGUOUS ad names here. Generic layout names like
+    // square_image_layout / carousel_headered_layout / text_image_button_layout
+    // are ALSO used by community-post sub-renderers -- and since elementData
+    // fires on every nested renderer, matching one of those nukes real posts too.
     NSArray *ads = @[@"brand_promo", @"text_search_ad", @"feed_ad_metadata",
                      @"statement_banner", @"ad_badge", @"promoted_sparkles_text_search_ad",
                      @"ads_video_bar"];
@@ -449,19 +464,22 @@ static NSMutableArray *ytlFilteredSections(NSArray *array) {
 %end
 
 // ============================================================================
-// QUEUE — client-side "watch queue" (custom reimplementation)
+// QUEUE — our own "watch queue" (Premium's is a lie, we built a real one)
 // ============================================================================
-// YouTube's native mobile queue is Premium-gated SERVER-SIDE: the "Add to queue"
-// button is delivered to non-Premium accounts as an upsell command (no client-side
-// queue action to hook), so it can't be unlocked. Instead we build our OWN queue:
-//   • long-press a video thumbnail in the feed → "Add to queue" (see ytlQueueLongPress)
-//   • the videoID is read straight out of the cell's thumbnail URL (i.ytimg.com/vi/<ID>/)
-//   • when a video finishes, we auto-play the next queued one (see YTPlayerViewController
-//     playbackControllerDidFinishPlayback:), reusing the app's vnd.youtube:// deep-link.
-// In-memory + deduped, like YouTube's own queue which also doesn't persist across launches.
+// We chased YouTube's native mobile queue for a while. Dead end: it's gated on
+// the SERVER. For a non-Premium account the "Add to queue" button ships with an
+// upsell command baked in -- there's no client-side queue action to hook, no flag
+// to flip. Verified the hard way (RE'd the binary, traced the commands on device).
+// So forget theirs -- here's ours:
+//   * long-press a feed video thumbnail -> "Add to queue"  (ytlQueueLongPress)
+//   * the video ID falls right out of the thumbnail URL, i.ytimg.com/vi/<ID>/ --
+//     no need to dig through the cell's guts (they're empty at press time anyway)
+//   * when a video ends we just play the next one  (playbackControllerDidFinishPlayback:)
+//     by opening vnd.youtube://<ID>, the same deep-link the app uses on itself.
+// It's in-memory and deduped. So is theirs -- neither survives a relaunch.
 
-// Session queue of video IDs — in-memory, like YouTube's own queue which also doesn't
-// persist across launches. Thread-safe; deduped so a video isn't queued twice.
+// The list itself. @synchronized on everything because feed cells and the player
+// poke it from different threads. Deduped: adding a video twice is a no-op.
 @interface YTLQueueManager : NSObject
 + (instancetype)shared;
 - (BOOL)enqueue:(NSString *)videoID;   // NO if already present
@@ -513,7 +531,9 @@ static NSMutableArray *ytlFilteredSections(NSArray *array) {
 }
 @end
 
-// Play a video by ID via the app's own deep-link handler (navigates to the watch page).
+// Play a video by ID. No private API needed -- we just hand the app its OWN
+// deep-link (vnd.youtube://ID) and let it navigate to the watch page. Same trick
+// shortsToRegular uses. canOpenURL guards against a weird build with no handler.
 static void ytlPlayVideoID(NSString *videoID) {
     if (!videoID.length) return;
     NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"vnd.youtube://%@", videoID]];
@@ -521,8 +541,10 @@ static void ytlPlayVideoID(NSString *videoID) {
         [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
 }
 
-// Pull the 11-char video ID out of a video-cell thumbnail URL, e.g.
-// https://i.ytimg.com/vi/<VIDEOID>/hq720.jpg  (also handles the /vi_webp/ variant).
+// The whole reason the queue works: a video thumbnail's URL literally spells out
+// its ID -- i.ytimg.com/vi/<VIDEOID>/hq720.jpg. So we don't parse protobufs or walk
+// the cell tree, we just yank the path segment between /vi/ (or /vi_webp/) and the
+// next slash. IDs are always 11 chars of [A-Za-z0-9_-]; anything else isn't one.
 static NSString *ytlVideoIDFromThumbnailURL(NSURL *url) {
     NSString *s = url.absoluteString;
     if (!s.length) return nil;
@@ -854,8 +876,9 @@ void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video
     if (ytlBool(@"disableAutoCaptions")) [self performSelector:@selector(turnOffCaptions) withObject:nil afterDelay:1.0];
 }
 
-// Queue auto-advance: when the current video finishes, play the next queued video (if any).
-// Fires regardless of the autoplay setting, so the queue drains even with autoplay off.
+// This is what makes the queue a QUEUE: the player tells us a video finished, and
+// if we've got something lined up, we play it. Note it fires no matter what the
+// autoplay toggle says -- a queue you built by hand should drain even with autoplay off.
 - (void)playbackControllerDidFinishPlayback:(id)arg1 {
     %orig;
     if (!ytlBool(@"enableQueue") || ![YTLQueueManager shared].count) return;
@@ -1327,10 +1350,11 @@ static NSURL *findImageURLInNode(ASDisplayNode *node, int depth) {
     return nil;
 }
 
-// Requests Photos read-write authorization (the app's Info.plist has
-// NSPhotoLibraryUsageDescription but NOT NSPhotoLibraryAddUsageDescription, so we must
-// use the read-write level and must not use UIImageWriteToSavedPhotosAlbum). Calls
-// granted(YES) on the main queue once access is available.
+// Getting permission to save a photo, the annoying way. YouTube's Info.plist has the
+// read-write Photos key but NOT the add-only one -- so the easy calls are off the table.
+// WARNING: do NOT use UIImageWriteToSavedPhotosAlbum here; with no add-only description
+// key it just fails silently. We ask for the READ-WRITE level instead and save through
+// PHPhotoLibrary. done(YES) always comes back on the main queue.
 static void ytlEnsurePhotosAuth(void (^done)(BOOL granted)) {
     if (@available(iOS 14.0, *)) {
         PHAuthorizationStatus status = [PHPhotoLibrary authorizationStatusForAccessLevel:PHAccessLevelReadWrite];
@@ -1485,8 +1509,10 @@ static void genImageFromLayer(CALayer *layer, UIColor *backgroundColor, void (^c
 // native single-tap (swipe survives because the carousel pan is on an ancestor
 // scroll view). This delegate permits simultaneous recognition so our long-press
 // coexists with — never blocks — the native tap.
-// Shared delegate for our injected long-press recognizers: permits simultaneous
-// recognition so they coexist with YouTube's own gestures rather than blocking them.
+// The gesture wars. We bolt long-presses onto YouTube's feed cells, and its own
+// recognizers fight us for the touch. This one delegate arbitrates for all of them.
+// Fair warning: gesture arbitration is decided at touch-BEGIN and can't be changed
+// late -- everything here has to be set before the finger goes down.
 @interface YTLGestureCoordinator : NSObject <UIGestureRecognizerDelegate>
 + (instancetype)shared;
 @end
@@ -1498,23 +1524,27 @@ static void genImageFromLayer(CALayer *layer, UIColor *backgroundColor, void (^c
     dispatch_once(&once, ^{ inst = [YTLGestureCoordinator new]; });
     return inst;
 }
+// Say yes to simultaneous recognition so we never BLOCK a native gesture --
+// we want to coexist, not fight (that just breaks scrolling).
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other { return YES; }
 
-// Make single-tap recognizers (YouTube's post-cell "open detail" nav) wait for our
-// long-press to fail. When the long-press recognizes (menu opens) it never fails, so the
-// tap never fires and we don't navigate on finger-lift. A quick tap fails the long-press
-// instantly, so normal tap-to-open-post still works. Scoped to tap-vs-long-press only, so
-// pans/pinches/other long-presses are untouched and scrolling stays responsive.
+// The finger-lift bug: YouTube's post cell opens the detail page on a plain TAP.
+// Our long-press opens a menu, but on release the tap fired too and navigated out
+// from behind the menu. Fix: make that tap wait for our long-press to FAIL. When the
+// long-press wins (menu up) it never fails -> the tap never fires. A quick tap fails
+// the long-press instantly, so normal tap-to-open still works. Only tap-vs-long-press,
+// so pans/pinches are left alone and scrolling stays smooth.
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)other {
     return [g isKindOfClass:[UILongPressGestureRecognizer class]] &&
            [other isKindOfClass:[UITapGestureRecognizer class]];
 }
 @end
 
-// Configures an injected long-press. cancelsTouchesInView=YES so that when the press is
-// recognized (menu opens), the underlying touch is cancelled — otherwise lifting the finger
-// fires YouTube's cell-tap and navigates behind the menu. (A quick tap never recognizes the
-// long-press, so tap-to-open-post is unaffected.)
+// One place to birth all our long-presses so they behave identically.
+// 0.4s beats YouTube's ~0.5s hold, so ours wins the race (see suppress below).
+// cancelsTouchesInView=YES: the instant we recognize, the underlying touch is
+// cancelled -- that's what stops the touch-driven nav on finger-lift. A quick tap
+// never reaches 0.4s so it never trips this; tap-to-open is safe.
 static void ytlConfigureLongPress(UILongPressGestureRecognizer *lp) {
     lp.minimumPressDuration = 0.4;
     lp.cancelsTouchesInView = YES;
@@ -1523,13 +1553,13 @@ static void ytlConfigureLongPress(UILongPressGestureRecognizer *lp) {
     lp.delegate = [YTLGestureCoordinator shared];
 }
 
-// When one of our long-press menus opens, momentarily disable YouTube's own tap AND
-// long-press recognizers on the cell so (a) releasing the finger doesn't also fire the
-// post-open / video-open navigation (cancelsTouchesInView only stops touch-driven navs, not
-// recognizer-driven ones), and (b) YouTube's own long-press context menu doesn't pop up
-// alongside ours. Our own recognizers (named "YTL…") are left alone. Ours fires at 0.4s,
-// before YouTube's (~0.5s), so its recognizer is disabled before it can begin. Re-enabled
-// shortly after so normal quick taps / long-presses still work.
+// cancelsTouchesInView only stops TOUCH-driven navs -- it does nothing to other
+// gesture recognizers, which track the touch on their own. So when our menu opens we
+// also reach up the view chain and switch off YouTube's own taps AND long-presses:
+// (a) so finger-lift can't fire a recognizer-driven nav, and (b) so YT's own context
+// menu doesn't pop up next to ours. Ours are named "YTL…" -- leave those be. We fire
+// at 0.4s, YT's at ~0.5s, so we kill its recognizer before it ever begins. Flip them
+// back on after 0.6s so a normal tap/long-press works next time.
 static void ytlSuppressAncestorTaps(UIView *view) {
     NSMutableArray<UIGestureRecognizer *> *toReenable = [NSMutableArray array];
     for (UIView *v = view; v; v = v.superview) {
@@ -1571,8 +1601,9 @@ static void ytlDumpRecognizers(UIView *view, NSString *tag) {
 }
 #endif
 
-// YES if an enclosing scroll view is actively moving — used to ignore taps/long-presses
-// that are really part of a scroll (e.g. tapping to stop a decelerating feed).
+// YES while some scroll view above us is moving. A hold that lands mid-scroll (say
+// you grab the feed to stop it decelerating) shouldn't be read as "open my menu" --
+// so every handler bails on this first.
 static BOOL ytlEnclosingScrollActive(UIView *view) {
     for (UIView *v = view; v; v = v.superview) {
         if ([v isKindOfClass:[UIScrollView class]]) {
@@ -1988,8 +2019,9 @@ static NSURL *ytlImageURLForView(UIView *rootView, CGPoint point) {
     ytlEnsurePhotosAuth(^(BOOL granted) {
         if (!granted) { [self showSaveResult:NO error:[NSError errorWithDomain:@"YTLite" code:1 userInfo:@{NSLocalizedDescriptionKey: @"Photos access denied"}]]; return; }
         [[PHPhotoLibrary sharedPhotoLibrary] performChanges:^{
-            // addResourceWithType: with the original bytes avoids PHPhotosErrorInvalidResource
-            // (3302) that creationRequestForAssetFromImage: hits by re-encoding.
+            // Save the ORIGINAL bytes when we have them. creationRequestForAssetFromImage:
+            // re-encodes the UIImage and chokes with PHPhotosErrorInvalidResource (3302) on
+            // some images -- addResourceWithType: writes the bytes as-is and just works.
             if (data) {
                 PHAssetCreationRequest *req = [PHAssetCreationRequest creationRequestForAsset];
                 [req addResourceWithType:PHAssetResourceTypePhoto data:data options:nil];
@@ -2237,11 +2269,12 @@ static BOOL ytlDescIsPost(NSString *desc) {
     [sheetController presentFromViewController:containerNode.closestViewController animated:YES completion:nil];
 }
 
-// Queue: long-press a feed video cell → "Add to queue" (or, if already queued,
-// "Remove from queue"), plus "Clear queue" when the queue is non-empty. The videoID comes
-// straight from the cell's thumbnail URL (i.ytimg.com/vi/<ID>/…). YouTube's own long-press
-// menu on these cells is AsyncDisplayKit-internal (fires only from a live gesture, so it can't
-// be re-triggered from here) — its actions remain available via the cell's ⋯ button.
+// The one entry point for the whole queue: hold a feed video and up comes our menu
+// -- Add (or Remove, if it's already in), and View queue once there's something in it.
+// WARNING: we can't fold YouTube's own long-press menu in here. On these cells that
+// menu lives inside AsyncDisplayKit and only fires from a LIVE gesture -- there's no
+// method to call to summon it after the fact (believe me, I looked). Its actions
+// still live on the cell's ⋯ button, so nothing's actually lost.
 %new
 - (void)ytlQueueLongPress:(UILongPressGestureRecognizer *)sender {
     if (sender.state != UIGestureRecognizerStateBegan) return;
