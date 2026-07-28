@@ -119,10 +119,8 @@ static void ytlScanAndCacheImages(NSData *data) {
 
 // Belt and suspenders: if an ad break ever does start, swallow it. skipAd is
 // the "skip" button's guts -- no-op it too so a stray break can't wedge.
-%hook YTAdController
-- (void)startAdBreak:(id)arg1 { if (!ytlBool(@"noAds")) %orig; }
-- (void)skipAd { if (!ytlBool(@"noAds")) %orig; }
-%end
+// (Removed the dead YTAdController hook — that class is gone in YT 21.x, and ads are already
+// killed at the source via YTIPlayerResponse above. It was doing nothing.)
 
 // elementData is the raw bytes for one EML feed element. It's called on EVERY
 // nested renderer, not just section roots -- keep that in mind below, it bites.
@@ -320,8 +318,11 @@ static NSMutableArray *ytlFilteredSections(NSArray *array) {
 - (void)updateAllRouteButtons { if (!ytlBool(@"noCast")) %orig; }
 %end
 
-%hook YTSettings
+// YT 21.x moved these settings onto YTSettingsImpl (was YTSettings).
+%hook YTSettingsImpl
 - (void)setDisableMDXDeviceDiscovery:(BOOL)arg1 { %orig(ytlBool(@"noCast")); }
+- (BOOL)areHintsDisabled { return ytlBool(@"noHints") ? YES : NO; }
+- (void)setHintsDisabled:(BOOL)arg1 { ytlBool(@"noHints") ? %orig(YES) : %orig; }
 %end
 
 // Hide Navigation Bar Buttons
@@ -825,7 +826,8 @@ static void ytlPresentQueueViewer(void) {
 %end
 
 // Forcibly Enable Miniplayer
-%hook YTWatchMiniBarViewController
+// YT 21.x switched to a floating miniplayer (YTWatchMiniBarViewController -> ...FloatingMiniplayerViewController).
+%hook YTWatchFloatingMiniplayerViewController
 - (void)updateMiniBarPlayerStateFromRenderer { if (!ytlBool(@"miniplayer")) %orig; }
 %end
 
@@ -893,8 +895,10 @@ static void ytlPresentQueueViewer(void) {
 %end
 
 // Disable Snap To Chapter (https://github.com/qnblackcat/uYouPlus/blob/main/uYouPlus.xm#L457-464)
-%hook YTSegmentableInlinePlayerBarView
-- (void)didMoveToWindow { %orig; if (ytlBool(@"dontSnapToChapter")) self.enableSnapToChapter = NO; }
+// YT 21.x moved the player bar to YTModularPlayerBarController; instead of the old
+// didMoveToWindow-on-the-view trick, just force the setter off (more robust anyway).
+%hook YTModularPlayerBarController
+- (void)setEnableSnapToChapter:(BOOL)arg1 { %orig(ytlBool(@"dontSnapToChapter") ? NO : arg1); }
 %end
 
 // Red Progress Bar and Gray Buffer Progress
@@ -902,15 +906,13 @@ static void ytlPresentQueueViewer(void) {
 - (id)quietProgressBarColor { return ytlBool(@"redProgressBar") ? [UIColor redColor] : %orig; }
 %end
 
-%hook YTSegmentableInlinePlayerBarView
-- (void)setBufferedProgressBarColor:(id)arg1 { if (ytlBool(@"redProgressBar")) %orig([UIColor colorWithRed:0.65 green:0.65 blue:0.65 alpha:0.60]); }
+// YT 21.x: buffer color moved to YTPlayerBarSegmentView. (Also always call %orig now --
+// the old hook skipped it entirely when redProgressBar was off, leaving the buffer uncolored.)
+%hook YTPlayerBarSegmentView
+- (void)setBufferedProgressBarColor:(id)arg1 { %orig(ytlBool(@"redProgressBar") ? [UIColor colorWithRed:0.65 green:0.65 blue:0.65 alpha:0.60] : arg1); }
 %end
 
 // Disable Hints
-%hook YTSettings
-- (BOOL)areHintsDisabled { return ytlBool(@"noHints") ? YES : NO; }
-- (void)setHintsDisabled:(BOOL)arg1 { ytlBool(@"noHints") ? %orig(YES) : %orig; }
-%end
 
 %hook YTUserDefaults
 - (BOOL)areHintsDisabled { return ytlBool(@"noHints") ? YES : NO; }
@@ -1182,7 +1184,8 @@ void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video
 %end
 
 // Remove "Play next in queue" from the menu @PoomSmart (https://github.com/qnblackcat/uYouPlus/issues/1138#issuecomment-1606415080)
-%hook YTMenuItemVisibilityHandler
+// YT 21.x renamed YTMenuItemVisibilityHandler -> ...HandlerImpl (same method).
+%hook YTMenuItemVisibilityHandlerImpl
 - (BOOL)shouldShowServiceItemRenderer:(YTIMenuConditionalServiceItemRenderer *)renderer {
     if (ytlBool(@"removePlayNext") && renderer.icon.iconType == 251) {
         return NO;
@@ -1277,11 +1280,9 @@ static BOOL findCell(ASNodeController *nodeController, NSArray <NSString *> *ide
 - (BOOL)shouldEnablePlayerBarOnlyOnPause { return ytlBool(@"shortsProgress") ? NO : YES; }
 %end
 
-%hook YTReelPlayerViewControllerSub
-- (BOOL)shouldEnablePlayerBar { return ytlBool(@"shortsProgress") ? YES : NO; }
-- (BOOL)shouldAlwaysEnablePlayerBar { return ytlBool(@"shortsProgress") ? YES : NO; }
-- (BOOL)shouldEnablePlayerBarOnlyOnPause { return ytlBool(@"shortsProgress") ? NO : YES; }
-%end
+// (Removed the dead YTReelPlayerViewControllerSub hook — class + shouldEnablePlayerBar are gone
+// in YT 21.x. Shorts progress is now driven by the YTShortsPlayerViewController hook below plus
+// the YTColdConfig/YTHotConfig scrubber flags.)
 
 %hook YTShortsPlayerViewController
 - (BOOL)shouldAlwaysEnablePlayerBar { return ytlBool(@"shortsProgress") ? YES : NO; }
@@ -2620,7 +2621,11 @@ BOOL isTabSelected = NO;
 
 %new
 - (void)didTapCopyInfoButton:(UIButton *)sender {
-    YTPlayerViewController *playerVC = self.resizeDelegate.parentViewController.parentViewController.parentViewController.playerViewController;
+    // Use the tracked live player instead of a hardcoded parentViewController chain -- that
+    // chain changed on newer YouTube and walking it hit an object with no -playerViewController
+    // (unrecognized selector -> crash).
+    YTPlayerViewController *playerVC = gYTLPlayer;
+    if (!playerVC) return;
     NSString *title = playerVC.playerResponse.playerData.videoDetails.title;
     NSString *shortDescription = playerVC.playerResponse.playerData.videoDetails.shortDescription;
 
