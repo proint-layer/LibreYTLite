@@ -1,3 +1,24 @@
+/*
+ * YTLite.x — SECTION MAP  (search a title, or jump to its line)
+ * Keep in sync when you add or move a "// ====" section banner below.
+ *
+ *     93  ADS, BACKGROUND PLAYBACK & FEED FILTERING
+ *    291  PREMIUM PROMO / INTERSTITIAL SUPPRESSION
+ *    330  NAVIGATION BAR & SEARCH
+ *    379  WATCH PAGE & PLAYER OVERLAY
+ *    463  PLAYER CONFIG FLAGS (YTColdConfig / YTHotConfig)
+ *    489  QUEUE — our own "watch queue" (Premium's is a lie, we built a real one)
+ *    944  PLAYBACK AUTOMATION
+ *   1172  MISC UI FIXES & MENU / PLAYER-BUTTON REMOVAL
+ *   1292  SHORTS
+ *   1432  COMMUNITY POST: IMAGE URL HELPERS, FULLSCREEN GALLERY & GESTURES
+ *   2496  PIVOT BAR / TABS
+ *   2613  ENGAGEMENT PANEL: COPY VIDEO INFO BUTTON
+ *   2670  SPEEDMASTER (long-press to temporarily change playback speed)
+ *   2722  SHARE LINK PRIVACY (strip YouTube's "si=" tracking identifier)
+ *   2911  MISCELLANEOUS (RTL formatting fix, album-cover CDN host fix)
+ */
+
 #import "YTLite.h"
 
 #if defined(YTL_POST_DEBUG)
