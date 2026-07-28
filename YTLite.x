@@ -531,11 +531,27 @@ static NSMutableArray *ytlFilteredSections(NSArray *array) {
 }
 @end
 
-// Play a video by ID. No private API needed -- we just hand the app its OWN
-// deep-link (vnd.youtube://ID) and let it navigate to the watch page. Same trick
-// shortsToRegular uses. canOpenURL guards against a weird build with no handler.
-static void ytlPlayVideoID(NSString *videoID) {
+// The responder-event that fires a navigation command (not in our imported headers).
+@interface YTCommandResponderEvent : NSObject
++ (instancetype)eventWithCommand:(id)command entry:(id)entry sendClick:(BOOL)sendClick firstResponder:(id)firstResponder;
+- (void)send;
+@end
+
+// Play a video by ID. This used to just open vnd.youtube://ID -- clean, but it DIED in
+// the background: iOS won't let a backgrounded app open a URL, so with the screen off the
+// queue just stopped. So now we fire YouTube's OWN watch-navigation command up the responder
+// chain (exactly what a related-video tap sends). The watch controller catches it and
+// reloads the current player IN PLACE -- no URL, no new screen -- which keeps working with
+// the app backgrounded, same as its autoplay does. `responder` should be something live in
+// the chain (hand it the player VC when you have one). openURL stays as a last-ditch fallback.
+static void ytlPlayVideoID(NSString *videoID, id responder) {
     if (!videoID.length) return;
+    YTICommand *cmd = [%c(YTICommand) watchNavigationEndpointWithVideoID:videoID];
+    if (!responder) responder = [%c(YTUIUtils) topViewControllerForPresenting];
+    if (cmd && responder) {
+        [[%c(YTCommandResponderEvent) eventWithCommand:cmd entry:nil sendClick:YES firstResponder:responder] send];
+        return;
+    }
     NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"vnd.youtube://%@", videoID]];
     if (url && [[UIApplication sharedApplication] canOpenURL:url])
         [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
@@ -666,7 +682,7 @@ static NSString *ytlVideoIDFromThumbnailURL(NSURL *url) {
     [tv deselectRowAtIndexPath:ip animated:YES];
     NSString *vid = _items[ip.row];
     [[YTLQueueManager shared] removeThroughIndex:ip.row]; // playing this one skips the ones before it
-    [self dismissViewControllerAnimated:YES completion:^{ ytlPlayVideoID(vid); }];
+    [self dismissViewControllerAnimated:YES completion:^{ ytlPlayVideoID(vid, nil); }];
 }
 
 - (void)tableView:(UITableView *)tv commitEditingStyle:(UITableViewCellEditingStyle)style forRowAtIndexPath:(NSIndexPath *)ip {
@@ -883,7 +899,10 @@ void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video
     %orig;
     if (!ytlBool(@"enableQueue") || ![YTLQueueManager shared].count) return;
     NSString *next = [[YTLQueueManager shared] dequeue];
-    dispatch_async(dispatch_get_main_queue(), ^{ ytlPlayVideoID(next); });
+    // Hand ytlPlayVideoID the player VC as the responder -- it's alive and in the chain
+    // even when we're backgrounded, which is what lets the queue keep going with the screen off.
+    __weak typeof(self) ws = self;
+    dispatch_async(dispatch_get_main_queue(), ^{ ytlPlayVideoID(next, ws); });
 }
 
 %new
