@@ -185,6 +185,8 @@
 "FixAlbumsDesc" = "Fixes the display of covers for users from Russia.";
 "NativeShare" = "Native share sheet";
 "NativeShareDesc" = "Uses system share sheet to share media";
+"NoShareChunk" = "Remove share identifier";
+"NoShareChunkDesc" = "Strips the \"si=\" tracking identifier from links you share. A good alternative to Native share sheet if you'd rather keep YouTube's own share menu.";
 "RemovePlayNext" = "Remove \"Play next in queue\"";
 "RemovePlayNextDesc" = "Removes \"Play next in queue\" option from menu.";
 "RemoveDownloadMenu" = "Remove \"Download\"";

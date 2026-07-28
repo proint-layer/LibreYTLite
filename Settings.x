@@ -332,6 +332,7 @@ static NSString *GetCacheSize() {
                 [self switchWithTitle:@"CommentManager" key:@"commentManager"],
                 [self switchWithTitle:@"FixAlbums" key:@"fixAlbums"],
                 [self switchWithTitle:@"NativeShare" key:@"nativeShare"],
+                [self switchWithTitle:@"NoShareChunk" key:@"noShareChunk"],
                 [self switchWithTitle:@"RemovePlayNext" key:@"removePlayNext"],
                 [self switchWithTitle:@"RemoveDownloadMenu" key:@"removeDownloadMenu"],
                 [self switchWithTitle:@"RemoveWatchLaterMenu" key:@"removeWatchLaterMenu"],

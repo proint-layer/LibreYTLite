@@ -2698,6 +2698,195 @@ static void manageSpeedmasterYTLite(UILongPressGestureRecognizer *gesture, YTMai
 %end
 
 // ============================================================================
+// SHARE LINK PRIVACY (strip YouTube's "si=" tracking identifier)
+// ============================================================================
+// YouTube stamps a per-share "si=" source identifier onto the links its own
+// share sheet hands out. It ties the shared link back to the sharing account/
+// session, so we drop it. This is the keep-YouTube's-share-sheet counterpart to
+// nativeShare -- that option sidesteps the sheet entirely by rebuilding clean
+// URLs from the share entity; this one leaves the sheet alone and scrubs the
+// outbound link.
+//
+// There is no single choke point in YT 21.x -- the share paths diverged:
+//   * "Copy link" is ELM-driven (ELMPBCopyToClipboardCommand) and lands the URL
+//     on UIPasteboard as a plain STRING, so an NSURL-typed sharer hook never sees
+//     it. We scrub it right at the clipboard, gated tightly to youtube links that
+//     actually carry an "si" so nothing else on the pasteboard is disturbed.
+//   * Messages / Mail still go through the legacy YT*Sharer composers, which hand
+//     us the link as an NSURL argument -- we clean that too.
+// Stripping an already-clean link is a no-op, so the overlapping coverage is safe.
+
+@interface YTBaseSharer : NSObject @end
+@interface YTCopyLinkSharer : YTBaseSharer @end
+@interface YTEmailSharer : YTBaseSharer @end
+@interface YTSystemActivityDialogSharer : YTBaseSharer @end
+@interface YTTextMessageSharer : YTBaseSharer @end
+
+// Core: drop the "si" query item from an NSURL. Pure -- no toggle/host gate.
+static NSURL *ytlURLDropSi(NSURL *url) {
+    NSURLComponents *comps = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+    NSArray<NSURLQueryItem *> *items = comps.queryItems;
+    if (items.count == 0) return url;
+    NSMutableArray<NSURLQueryItem *> *kept = [NSMutableArray arrayWithCapacity:items.count];
+    for (NSURLQueryItem *item in items)
+        if ([item.name caseInsensitiveCompare:@"si"] != NSOrderedSame) [kept addObject:item];
+    if (kept.count == items.count) return url;   // no "si" present -- leave it untouched
+    comps.queryItems = kept.count ? kept : nil;  // nil drops the now-empty trailing "?"
+    return comps.URL ?: url;
+}
+
+// Gated NSURL wrapper used by the legacy composer sharers.
+static NSURL *ytlStrippedShareURL(NSURL *url) {
+    return (ytlBool(@"noShareChunk") && url) ? ytlURLDropSi(url) : url;
+}
+
+// Gated string scrubber for the clipboard path. Touches only youtube links that
+// carry an "si" param; handles it as first-and-only, first-of-many, or a later
+// param so no stray "?"/"&" is left behind.
+static NSString *ytlStringStripSi(NSString *s) {
+    if (!ytlBool(@"noShareChunk") || s.length == 0) return s;
+    if ([s rangeOfString:@"si=" options:NSCaseInsensitiveSearch].location == NSNotFound) return s;
+    if ([s rangeOfString:@"youtu" options:NSCaseInsensitiveSearch].location == NSNotFound) return s;
+    static NSRegularExpression *reLead, *reAny; static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        reLead = [NSRegularExpression regularExpressionWithPattern:@"\\?si=[^&#\\s]*&" options:NSRegularExpressionCaseInsensitive error:nil];
+        reAny  = [NSRegularExpression regularExpressionWithPattern:@"[?&]si=[^&#\\s]*"  options:NSRegularExpressionCaseInsensitive error:nil];
+    });
+    NSMutableString *m = [s mutableCopy];
+    [reLead replaceMatchesInString:m options:0 range:NSMakeRange(0, m.length) withTemplate:@"?"];  // "?si=x&rest" -> "?rest"
+    [reAny  replaceMatchesInString:m options:0 range:NSMakeRange(0, m.length) withTemplate:@""];    // "?si=x" / "&si=x" -> ""
+    return [m copy];
+}
+
+// --- clipboard path (Copy link) ---
+// The copy lands on UIPasteboard, but which setter YouTube uses isn't fixed, so
+// we cover every write path that can carry a URL: plain string, url, their array
+// forms, the typed value/data setters, and setItems:(options:). A pasteboard value
+// can also be UTF-8 NSData rather than an NSString/NSURL, so ytlCleanPasteboardValue
+// handles all three. All scrubbing routes through ytlStringStripSi, which no-ops on
+// anything that isn't a youtube link carrying an "si" param.
+static id ytlCleanPasteboardValue(id v) {
+    if ([v isKindOfClass:[NSString class]]) {
+        NSString *c = ytlStringStripSi(v);
+        return [c isEqualToString:v] ? v : c;
+    }
+    if ([v isKindOfClass:[NSURL class]]) {
+        NSString *abs = ((NSURL *)v).absoluteString;
+        NSString *c = ytlStringStripSi(abs);
+        return [c isEqualToString:abs] ? v : ([NSURL URLWithString:c] ?: v);
+    }
+    if ([v isKindOfClass:[NSData class]]) {
+        NSString *s = [[NSString alloc] initWithData:v encoding:NSUTF8StringEncoding];
+        if (!s) return v;
+        NSString *c = ytlStringStripSi(s);
+        return [c isEqualToString:s] ? v : ([c dataUsingEncoding:NSUTF8StringEncoding] ?: v);
+    }
+    return v;
+}
+
+static NSArray *ytlCleanPasteboardItems(NSArray<NSDictionary<NSString *, id> *> *items) {
+    if (!ytlBool(@"noShareChunk") || items.count == 0) return items;
+    NSMutableArray *out = [NSMutableArray arrayWithCapacity:items.count];
+    BOOL changed = NO;
+    for (NSDictionary<NSString *, id> *item in items) {
+        NSMutableDictionary *d = [item mutableCopy];
+        for (NSString *type in item) {
+            id nv = ytlCleanPasteboardValue(item[type]);
+            if (nv != item[type]) { d[type] = nv; changed = YES; }
+        }
+        [out addObject:d];
+    }
+    return changed ? out : items;
+}
+
+// UIPasteboard is a CLASS CLUSTER: [UIPasteboard generalPasteboard] returns a
+// private _UIConcretePasteboard whose setters override the public class's, so
+// instance hooks on UIPasteboard itself never fire for the real object (confirmed
+// on YT 21.25.5 via the generalPasteboard class probe). Hook the concrete class.
+@interface _UIConcretePasteboard : UIPasteboard @end
+
+%hook _UIConcretePasteboard
+- (void)setString:(NSString *)string {
+    YTLDBG(@"PB setString: %@", string);
+    %orig(ytlStringStripSi(string));
+}
+- (void)setObjects:(NSArray *)objects {
+    YTLDBG(@"PB setObjects: %@", objects);
+    if (!ytlBool(@"noShareChunk") || objects.count == 0) return %orig;
+    NSMutableArray *out = [NSMutableArray arrayWithCapacity:objects.count];
+    for (id o in objects) [out addObject:ytlCleanPasteboardValue(o)];
+    %orig(out);
+}
+- (void)setStrings:(NSArray<NSString *> *)strings {
+    YTLDBG(@"PB setStrings: %@", strings);
+    if (!ytlBool(@"noShareChunk") || strings.count == 0) return %orig;
+    NSMutableArray *out = [NSMutableArray arrayWithCapacity:strings.count];
+    for (NSString *s in strings) [out addObject:ytlStringStripSi(s)];
+    %orig(out);
+}
+- (void)setURL:(NSURL *)url {
+    YTLDBG(@"PB setURL: %@", url);
+    %orig((NSURL *)ytlCleanPasteboardValue(url));
+}
+- (void)setURLs:(NSArray<NSURL *> *)urls {
+    YTLDBG(@"PB setURLs: %@", urls);
+    if (!ytlBool(@"noShareChunk") || urls.count == 0) return %orig;
+    NSMutableArray *out = [NSMutableArray arrayWithCapacity:urls.count];
+    for (NSURL *u in urls) [out addObject:ytlCleanPasteboardValue(u)];
+    %orig(out);
+}
+- (void)setValue:(id)value forPasteboardType:(NSString *)pasteboardType {
+    YTLDBG(@"PB setValue:(%@) forType:%@", value, pasteboardType);
+    %orig(ytlCleanPasteboardValue(value), pasteboardType);
+}
+- (void)setData:(NSData *)data forPasteboardType:(NSString *)pasteboardType {
+    YTLDBG(@"PB setData(len=%lu) forType:%@", (unsigned long)data.length, pasteboardType);
+    %orig((NSData *)ytlCleanPasteboardValue(data), pasteboardType);
+}
+- (void)setItems:(NSArray<NSDictionary<NSString *, id> *> *)items {
+    YTLDBG(@"PB setItems: %@", items);
+    %orig(ytlCleanPasteboardItems(items));
+}
+- (void)setItems:(NSArray<NSDictionary<NSString *, id> *> *)items options:(NSDictionary *)options {
+    YTLDBG(@"PB setItems:options: %@", items);
+    %orig(ytlCleanPasteboardItems(items), options);
+}
+%end
+
+// --- composer / system-sheet path (Messages, Mail, iOS share sheet) ---
+// These concrete sharers each carry their own IMP of shareObjectWithID:...:URL:...
+// and may not call super, so we clean the URL arg on the base AND every subclass.
+%hook YTBaseSharer
+- (void)shareObjectWithID:(id)objectID shareType:(NSInteger)shareType URL:(NSURL *)url title:(NSString *)title successBlock:(id)successBlock errorBlock:(id)errorBlock {
+    %orig(objectID, shareType, ytlStrippedShareURL(url), title, successBlock, errorBlock);
+}
+%end
+
+%hook YTCopyLinkSharer
+- (void)shareObjectWithID:(id)objectID shareType:(NSInteger)shareType URL:(NSURL *)url title:(NSString *)title successBlock:(id)successBlock errorBlock:(id)errorBlock {
+    %orig(objectID, shareType, ytlStrippedShareURL(url), title, successBlock, errorBlock);
+}
+%end
+
+%hook YTEmailSharer
+- (void)shareObjectWithID:(id)objectID shareType:(NSInteger)shareType URL:(NSURL *)url title:(NSString *)title successBlock:(id)successBlock errorBlock:(id)errorBlock {
+    %orig(objectID, shareType, ytlStrippedShareURL(url), title, successBlock, errorBlock);
+}
+%end
+
+%hook YTSystemActivityDialogSharer
+- (void)shareObjectWithID:(id)objectID shareType:(NSInteger)shareType URL:(NSURL *)url title:(NSString *)title successBlock:(id)successBlock errorBlock:(id)errorBlock {
+    %orig(objectID, shareType, ytlStrippedShareURL(url), title, successBlock, errorBlock);
+}
+%end
+
+%hook YTTextMessageSharer
+- (void)shareObjectWithID:(id)objectID shareType:(NSInteger)shareType URL:(NSURL *)url title:(NSString *)title successBlock:(id)successBlock errorBlock:(id)errorBlock {
+    %orig(objectID, shareType, ytlStrippedShareURL(url), title, successBlock, errorBlock);
+}
+%end
+
+// ============================================================================
 // MISCELLANEOUS (RTL formatting fix, album-cover CDN host fix)
 // ============================================================================
 
@@ -2730,6 +2919,8 @@ static NSURL *newCoverURL(NSURL *originalURL) {
 %end
 
 %ctor {
+    YTLDBG(@"YTLite loaded (pasteboard diagnostics build); noShareChunk=%d", ytlBool(@"noShareChunk"));
+
     if (ytlBool(@"shortsOnlyMode") && (ytlBool(@"removeShorts") || ytlBool(@"reExplore"))) {
         ytlSetBool(NO, @"removeShorts");
         ytlSetBool(NO, @"reExplore");
