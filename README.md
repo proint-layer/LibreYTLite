@@ -18,6 +18,11 @@ Fork this repo and trigger the **Build YTLite IPA** workflow from the Actions ta
 - Shorts hiding and controls
 - Speed controls (up to 5×)
 - Tab bar customization
+- iSponsorBlock (crowd-sourced sponsor-segment skipping)
+- Watch queue — a client-side play queue with a reorderable viewer (long-press a video → *Add to queue*)
+- Community-post image viewer — tap to zoom, page multi-image galleries, save to Photos
+- Remove share identifier — strips YouTube's `si=` tracking parameter from links you share
+- Native iOS share sheet
 - And everything else from the original YTLite settings
 
 ## Credits
@@ -27,6 +32,8 @@ Fork this repo and trigger the **Build YTLite IPA** workflow from the Actions ta
 - [arichornlover](https://github.com/arichornlover/uYouEnhanced) — uYouEnhanced (EML-based feed filtering approach)
 - [Tonwalter888](https://github.com/Tonwalter888) — YTUHD
 - [therealFoxster](https://github.com/therealFoxster) — DontEatMyContent
+- [Galactic-Dev](https://github.com/Galactic-Dev) — iSponsorBlock
+- [asdfzxcvbn](https://github.com/asdfzxcvbn) — cyan (pyzule-rw), the injection tool
 - [Dan Pashin](https://github.com/danpashin) — special thanks
 
 ## AI Attribution
