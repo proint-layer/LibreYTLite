@@ -490,6 +490,7 @@ static NSMutableArray *ytlFilteredSections(NSArray *array) {
 - (void)clear;
 - (NSArray<NSString *> *)allVideoIDs;  // ordered snapshot (for the viewer)
 - (void)removeThroughIndex:(NSUInteger)idx;   // drop items 0…idx inclusive
+- (void)moveFrom:(NSUInteger)from to:(NSUInteger)to;   // reorder (drag in the viewer)
 @end
 
 @implementation YTLQueueManager {
@@ -529,6 +530,14 @@ static NSMutableArray *ytlFilteredSections(NSArray *array) {
         [_ids removeObjectsInRange:NSMakeRange(0, idx + 1)];
     }
 }
+- (void)moveFrom:(NSUInteger)from to:(NSUInteger)to {
+    @synchronized (self) {
+        if (from >= _ids.count || to >= _ids.count || from == to) return;
+        NSString *v = _ids[from];
+        [_ids removeObjectAtIndex:from];
+        [_ids insertObject:v atIndex:to];
+    }
+}
 @end
 
 // The responder-event that fires a navigation command (not in our imported headers).
@@ -536,6 +545,22 @@ static NSMutableArray *ytlFilteredSections(NSArray *array) {
 + (instancetype)eventWithCommand:(id)command entry:(id)entry sendClick:(BOOL)sendClick firstResponder:(id)firstResponder;
 - (void)send;
 @end
+
+// The duration: variant of the toast (our header only has the no-duration one). Lets us
+// make "Added to queue" flash by instead of lingering for the default ~4s.
+@interface YTToastResponderEvent (YTLQueue)
++ (instancetype)eventWithMessage:(NSString *)message infoType:(NSInteger)infoType duration:(double)duration firstResponder:(id)firstResponder;
+@end
+
+// Queue session state. gYTLPlayer: the live player (weak, so it auto-nils). gYTLQueueEngaged:
+// is the current playback session following our queue? (Only then do we auto-advance -- so
+// exiting and later watching something unrelated won't get hijacked by a stale queue.)
+// gYTLExpectingQueueLoad: set right before WE navigate to a queued video, so the upcoming
+// load is recognized as queue-driven (vs. the user opening something else).
+static __weak YTPlayerViewController *gYTLPlayer;
+static BOOL gYTLQueueEngaged;
+static BOOL gYTLExpectingQueueLoad;
+static BOOL ytlVideoIsActive(void) { return gYTLPlayer != nil && gYTLPlayer.viewIfLoaded.window != nil; }
 
 // Play a video by ID. This used to just open vnd.youtube://ID -- clean, but it DIED in
 // the background: iOS won't let a backgrounded app open a URL, so with the screen off the
@@ -546,6 +571,7 @@ static NSMutableArray *ytlFilteredSections(NSArray *array) {
 // the chain (hand it the player VC when you have one). openURL stays as a last-ditch fallback.
 static void ytlPlayVideoID(NSString *videoID, id responder) {
     if (!videoID.length) return;
+    gYTLExpectingQueueLoad = YES; // this navigation is queue-driven; keep the session engaged
     YTICommand *cmd = [%c(YTICommand) watchNavigationEndpointWithVideoID:videoID];
     if (!responder) responder = [%c(YTUIUtils) topViewControllerForPresenting];
     if (cmd && responder) {
@@ -580,11 +606,12 @@ static NSString *ytlVideoIDFromThumbnailURL(NSURL *url) {
     return nil;
 }
 
-// Queue viewer: a modal list of the queued videos (thumbnail + title). Tap a row to play it
-// (dropping the ones queued before it), swipe to remove one, or Clear to empty. Titles are
-// fetched lazily via YouTube's public oEmbed endpoint; thumbnails from i.ytimg.com. Opened
-// from the long-press "View queue" action.
-@interface YTLQueueViewController : UIViewController <UITableViewDataSource, UITableViewDelegate>
+// Queue viewer -- our stand-in for the native "Up next" panel (which we can't populate;
+// it's server-built, see the RE notes). Presented as a bottom sheet so it feels like YT's
+// own panels. Tap a row to play it (dropping the ones before it), long-press-drag to
+// reorder (instant + local -- no server round-trip, unlike a real playlist), swipe to
+// remove, Clear to empty. Titles via YT's public oEmbed; thumbnails from i.ytimg.com.
+@interface YTLQueueViewController : UIViewController <UITableViewDataSource, UITableViewDelegate, UITableViewDragDelegate, UITableViewDropDelegate>
 @end
 
 @implementation YTLQueueViewController {
@@ -610,12 +637,17 @@ static NSString *ytlVideoIDFromThumbnailURL(NSURL *url) {
     _table.dataSource = self;
     _table.delegate = self;
     _table.rowHeight = 76;
+    // Long-press-drag reorder, native style. Keeps tap-to-play and swipe-remove working
+    // (unlike edit-mode), which is how YT's own list panels behave.
+    _table.dragInteractionEnabled = YES;
+    _table.dragDelegate = self;
+    _table.dropDelegate = self;
     [self.view addSubview:_table];
 
     for (NSString *vid in _items) [self fetchTitleFor:vid];
 }
 
-- (void)updateTitle { self.title = [NSString stringWithFormat:@"%@ (%lu)", LOC(@"Queue"), (unsigned long)_items.count]; }
+- (void)updateTitle { self.title = [NSString stringWithFormat:@"%@ (%lu)", LOC(@"UpNext"), (unsigned long)_items.count]; }
 - (void)ytlDone { [self dismissViewControllerAnimated:YES completion:nil]; }
 - (void)ytlClearAll {
     [[YTLQueueManager shared] clear];
@@ -692,7 +724,58 @@ static NSString *ytlVideoIDFromThumbnailURL(NSURL *url) {
     [tv deleteRowsAtIndexPaths:@[ip] withRowAnimation:UITableViewRowAnimationAutomatic];
     [self updateTitle];
 }
+
+// --- drag-to-reorder (local only; a real playlist would POST an edit here) ---
+- (NSArray<UIDragItem *> *)tableView:(UITableView *)tv itemsForBeginningDragSession:(id<UIDragSession>)session atIndexPath:(NSIndexPath *)ip {
+    // Local reorder only -- the provider payload is unused, but drag needs an item.
+    UIDragItem *item = [[UIDragItem alloc] initWithItemProvider:[[NSItemProvider alloc] initWithObject:_items[ip.row]]];
+    item.localObject = _items[ip.row];
+    return @[item];
+}
+
+- (BOOL)tableView:(UITableView *)tv canHandleDropSession:(id<UIDropSession>)session { return YES; }
+
+- (UITableViewDropProposal *)tableView:(UITableView *)tv dropSessionDidUpdate:(id<UIDropSession>)session withDestinationIndexPath:(NSIndexPath *)dst {
+    return [[UITableViewDropProposal alloc] initWithDropOperation:UIDropOperationMove intent:UITableViewDropIntentInsertAtDestinationIndexPath];
+}
+
+- (void)tableView:(UITableView *)tv performDropWithCoordinator:(id<UITableViewDropCoordinator>)coordinator {
+    NSIndexPath *dst = coordinator.destinationIndexPath ?: [NSIndexPath indexPathForRow:(_items.count ? _items.count - 1 : 0) inSection:0];
+    for (id<UITableViewDropItem> dropItem in coordinator.items) {
+        NSIndexPath *src = dropItem.sourceIndexPath;
+        if (!src || src.row >= _items.count) continue;
+        NSString *vid = _items[src.row];
+        [_items removeObjectAtIndex:src.row];
+        [_items insertObject:vid atIndex:dst.row];
+        [[YTLQueueManager shared] moveFrom:src.row to:dst.row];
+        [tv performBatchUpdates:^{
+            [tv deleteRowsAtIndexPaths:@[src] withRowAnimation:UITableViewRowAnimationAutomatic];
+            [tv insertRowsAtIndexPaths:@[dst] withRowAnimation:UITableViewRowAnimationAutomatic];
+        } completion:nil];
+        [coordinator dropItem:dropItem.dragItem toRowAtIndexPath:dst];
+    }
+}
 @end
+
+// Pop the queue viewer as a bottom sheet. Shared by the long-press "View queue" action and
+// the player-overlay queue button.
+static void ytlPresentQueueViewer(void) {
+    YTLQueueViewController *vc = [YTLQueueViewController new];
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+    nav.modalPresentationStyle = UIModalPresentationPageSheet;
+    if (@available(iOS 15.0, *)) {
+        UISheetPresentationController *sp = nav.sheetPresentationController;
+        sp.detents = @[UISheetPresentationControllerDetent.mediumDetent, UISheetPresentationControllerDetent.largeDetent];
+        sp.prefersGrabberVisible = YES;
+    }
+    [[%c(YTUIUtils) topViewControllerForPresenting] presentViewController:nav animated:YES completion:nil];
+}
+
+// NOTE: no player-overlay queue button. We tried one (hand-rolled, then via YTVideoOverlay)
+// and both broke iSponsorBlock's skip overlay -- iSponsorBlock does its OWN button management
+// on YTMainAppControlsOverlayView (addSubview + a layoutSubviews hook), and a second manager on
+// that view displaces its button. The queue is reachable via the long-press "View queue" action
+// instead. If a watch-page button is revisited, it must not touch YTMainAppControlsOverlayView.
 
 // Remove Dark Background in Overlay
 %hook YTMainAppVideoPlayerOverlayView
@@ -885,6 +968,12 @@ void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video
 - (void)loadWithPlayerTransition:(id)arg1 playbackConfig:(id)arg2 {
     %orig;
 
+    gYTLPlayer = self; // remember the live player so the queue knows if anything's playing
+    // Engage the queue only for videos WE started; any other load (the user opened something
+    // else, or came back later) disengages, so a stale queue can't hijack unrelated playback.
+    if (gYTLExpectingQueueLoad) { gYTLExpectingQueueLoad = NO; gYTLQueueEngaged = YES; }
+    else gYTLQueueEngaged = NO;
+
     if (ytlInt(@"wiFiQualityIndex") != 0 || ytlInt(@"cellQualityIndex") != 0) [self performSelector:@selector(autoQuality) withObject:nil afterDelay:1.0];
     if (ytlBool(@"autoFullscreen")) [self performSelector:@selector(autoFullscreen) withObject:nil afterDelay:0.75];
     if (ytlBool(@"shortsToRegular")) [self performSelector:@selector(shortsToRegular) withObject:nil afterDelay:0.75];
@@ -897,7 +986,9 @@ void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video
 // autoplay toggle says -- a queue you built by hand should drain even with autoplay off.
 - (void)playbackControllerDidFinishPlayback:(id)arg1 {
     %orig;
-    if (!ytlBool(@"enableQueue") || ![YTLQueueManager shared].count) return;
+    // Only advance while the session is engaged with the queue (see gYTLQueueEngaged) -- so
+    // exiting mid-queue and later finishing an unrelated video doesn't get hijacked.
+    if (!ytlBool(@"enableQueue") || !gYTLQueueEngaged || ![YTLQueueManager shared].count) return;
     NSString *next = [[YTLQueueManager shared] dequeue];
     // Hand ytlPlayVideoID the player VC as the responder -- it's alive and in the chain
     // even when we're backgrounded, which is what lets the queue keep going with the screen off.
@@ -2316,17 +2407,20 @@ static BOOL ytlDescIsPost(NSString *desc) {
         }]];
     } else {
         [sheet addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"AddToQueue") iconImage:YTImageNamed(@"yt_outline_list_queue_24pt") style:0 handler:^ {
+            // "Add to queue" ALWAYS just queues -- it never hijacks the player. If a video is
+            // playing, engage so the queue follows it; if nothing's playing it just waits in the
+            // queue until you start it from View queue (tap an item).
             [q enqueue:videoID];
+            if (ytlVideoIsActive()) gYTLQueueEngaged = YES;
             NSString *msg = [NSString stringWithFormat:@"%@ (%lu)", LOC(@"AddedToQueue"), (unsigned long)q.count];
-            [[%c(YTToastResponderEvent) eventWithMessage:msg firstResponder:responder] send];
+            // Quick flash (~0.8s) -- "Added to queue" doesn't need to linger like the default ~4s.
+            [[%c(YTToastResponderEvent) eventWithMessage:msg infoType:0 duration:0.8 firstResponder:responder] send];
         }]];
     }
 
     if (q.count) {
         [sheet addAction:[%c(YTActionSheetAction) actionWithTitle:[NSString stringWithFormat:@"%@ (%lu)", LOC(@"ViewQueue"), (unsigned long)q.count] iconImage:YTImageNamed(@"yt_outline_list_view_24pt") style:0 handler:^ {
-            YTLQueueViewController *vc = [YTLQueueViewController new];
-            UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
-            [[%c(YTUIUtils) topViewControllerForPresenting] presentViewController:nav animated:YES completion:nil];
+            ytlPresentQueueViewer();
         }]];
     }
 

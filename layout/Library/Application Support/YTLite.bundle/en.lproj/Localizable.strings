@@ -65,6 +65,7 @@
 "ClearQueue" = "Clear queue";
 "ViewQueue" = "View queue";
 "Queue" = "Queue";
+"UpNext" = "Up next";
 "TapToPlay" = "Tap to play";
 "PortraitFullscreen" = "Portrait fullscreen mode";
 "PortraitFullscreenDesc" = "Enables portrait fullscreen mode support.";
