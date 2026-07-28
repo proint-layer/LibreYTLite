@@ -48,7 +48,9 @@ The settings screen is built in `Settings.x` by `-[YTSettingsSectionItemManager 
 
 **Localization — `LOC()`.** `LOC(@"Key")` resolves against `NSBundle.ytl_defaultBundle` (the injected `YTLite.bundle`). Keys are self-documenting English identifiers; strings live in `layout/Library/Application Support/YTLite.bundle/<lang>.lproj/Localizable.strings`. To list all keys in use: `grep -o 'LOC(@"[^"]*")' *.x`.
 
-**Optional tweaks as submodules.** Bundled features that are their own upstream projects are git submodules under `tweaks/` (see `.gitmodules`): PoomSmart's `YouGroupSettings`, `YTVideoOverlay`, `Return-YouTube-Dislikes`, `YTABConfig`, `YouQuality`; `DontEatMyContent` (therealFoxster); `YTUHD` (Tonwalter888); `iSponsorBlock` (Galactic-Dev); and `Alderis` (hbang — the color-picker framework iSponsorBlock depends on). They are built independently and injected alongside the main tweak — the core `YTLite` tweak does not link against them.
+**Optional tweaks as submodules.** Bundled features that are their own upstream projects are git submodules under `tweaks/` (see `.gitmodules`): PoomSmart's `YouGroupSettings`, `Return-YouTube-Dislikes`, `YTABConfig`; `DontEatMyContent` (therealFoxster); `iSponsorBlock` (Galactic-Dev); and `Alderis` (hbang — the color-picker framework iSponsorBlock depends on). They are built independently and injected alongside the main tweak — the core `YTLite` tweak does not link against them.
+
+**Branch layout.** `main` is the lean default. The 4K/high-bitrate + in-player quality-switcher tweaks — `YTUHD`, `YouQuality`, and their shared `YTVideoOverlay` library (both consumers need it at runtime) — were pruned from `main` and live on the **`full`** branch, along with their CI build steps and `enable_*` inputs. Land core fixes on `main`; to propagate them to `full`, **cherry-pick** those commits — do *not* `git merge main` into `full`, which would replay the prune commit and delete the tweaks again. Keep tweak-set changes (adding/removing an optional tweak) branch-specific. `YouGroupSettings` stays on `main` — it's the settings-grouping dependency of the PoomSmart tweaks that remain (RYD/DontEatMyContent), not standalone.
 
 ## 4. Build & inject workflow
 
@@ -68,7 +70,7 @@ Makefile facts: `TWEAK_NAME = YTLite`, `ARCHS = arm64`, target `iphone:clang:lat
 ```bash
 cyan --overwrite -i youtube.ipa -o LibreYTLite.ipa \
   -f packages/com.dvntm.ytlite_*.deb \
-     tweaks/YTUHD/packages/*.deb  ...other tweak debs... \
+     tweaks/YTABConfig/packages/*.deb  ...other tweak debs... \
      tweaks/iSponsorBlock/packages/*.deb \
      tweaks/Alderis/libcolorpicker.dylib \
      tweaks/Alderis/.theos/obj/install_Alderis.xcarchive/Products/Library/Frameworks/Alderis.framework

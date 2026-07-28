@@ -17,10 +17,6 @@ on:
         default: "com.google.ios.youtube"
         required: true
         type: string
-      enable_ytuhd:
-        description: "Integrate YTUHD"
-        type: boolean
-        default: false
       enable_ryd:
         description: "Integrate Return YouTube Dislikes"
         type: boolean
@@ -31,10 +27,6 @@ on:
         default: false
       enable_demc:
         description: "Integrate DontEatMyContent"
-        type: boolean
-        default: false
-      enable_yq:
-        description: "Integrate YouQuality"
         type: boolean
         default: false
       enable_isponsorblock:
@@ -105,19 +97,13 @@ jobs:
           mv packages/*.deb ytlite.deb
 
       - name: Install YouTubeHeader and PSHeader into Theos (for optional tweaks)
-        if: ${{ inputs.enable_ytuhd || inputs.enable_yq || inputs.enable_ryd || inputs.enable_ytabc || inputs.enable_demc }}
+        if: ${{ inputs.enable_ryd || inputs.enable_ytabc || inputs.enable_demc }}
         run: |
           cp -r ../YouTubeHeader $THEOS/include/YouTubeHeader
           if [ "${{ inputs.enable_demc }}" = "true" ]; then
             cp -r ../YouTubeHeader $THEOS/include/YTHeaders
           fi
           git clone --quiet --depth=1 https://github.com/PoomSmart/PSHeader.git $THEOS/include/PSHeader
-
-      - name: Build YTUHD
-        if: ${{ inputs.enable_ytuhd }}
-        run: |
-          cd tweaks/YTUHD && make clean package DEBUG=0 FINALPACKAGE=1
-          mv packages/*.deb ../../ytuhd.deb
 
       - name: Build Return YouTube Dislikes
         if: ${{ inputs.enable_ryd }}
@@ -132,22 +118,10 @@ jobs:
           mv packages/*.deb ../../ytabc.deb
 
       - name: Build YouGroupSettings
-        if: ${{ inputs.enable_ytuhd || inputs.enable_yq || inputs.enable_ryd || inputs.enable_demc }}
+        if: ${{ inputs.enable_ryd || inputs.enable_demc }}
         run: |
           cd tweaks/YouGroupSettings && make clean package DEBUG=0 FINALPACKAGE=1
           mv packages/*.deb ../../ygs.deb
-
-      - name: Build YouQuality
-        if: ${{ inputs.enable_yq }}
-        run: |
-          cd tweaks/YouQuality && make clean package DEBUG=0 FINALPACKAGE=1
-          mv packages/*.deb ../../yq.deb
-
-      - name: Build YTVideoOverlay
-        if: ${{ inputs.enable_ytuhd || inputs.enable_yq }}
-        run: |
-          cd tweaks/YTVideoOverlay && make clean package DEBUG=0 FINALPACKAGE=1
-          mv packages/*.deb ../../ytvo.deb
 
       - name: Build DontEatMyContent
         if: ${{ inputs.enable_demc }}

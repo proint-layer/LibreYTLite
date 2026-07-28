@@ -11,8 +11,6 @@ Fork this repo and trigger the **Build YTLite IPA** workflow from the Actions ta
 - Ad blocking (pre-roll, banner, and overlay ads)
 - Background playback
 - Return YouTube Dislikes
-- YTUHD (4K / high bitrate quality unlock)
-- YouQuality (manual quality selection)
 - YTABConfig (A/B flag overrides)
 - DontEatMyContent (safe area fix)
 - Shorts hiding and controls
@@ -24,6 +22,8 @@ Fork this repo and trigger the **Build YTLite IPA** workflow from the Actions ta
 - Remove share identifier — strips YouTube's `si=` tracking parameter from links you share
 - Native iOS share sheet
 - And everything else from the original YTLite settings
+
+> **Want 4K / high-bitrate video or the in-player quality switcher?** Those extras (YTUHD + YouQuality, via YTVideoOverlay) live on the [`full`](../../tree/full) branch. `main` is the leaner default without them.
 
 ## Credits
 
