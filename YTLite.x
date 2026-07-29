@@ -474,11 +474,11 @@ static NSMutableArray *ytlFilteredSections(NSArray *array) {
 // Stick Sort Buttons in Comments Section
 - (BOOL)enableHideChipsInTheCommentsHeaderOnScrollIos { return ytlBool(@"stickSortComments") ? NO : %orig; }
 // Hide Sort Buttons in Comments Section
-- (BOOL)enableChipsInTheCommentsHeaderIos { return ytlBool(@"hideSortComments") ? NO : %orig; }
+- (BOOL)enableChipsInTheCommentsHeaderIos { return ytlBool(@"hideSortComments") ? NO : %orig; } // DEAD (21.x): selector absent — hideSortComments inactive; see HOOK_AUDIT.md
 // Use System Theme
-- (BOOL)shouldUseAppThemeSetting { return YES; }
+- (BOOL)shouldUseAppThemeSetting { return YES; } // DEAD (21.x): selector absent — useSystemTheme inactive; see HOOK_AUDIT.md
 // Dismiss Panel By Swiping in Fullscreen Mode
-- (BOOL)isLandscapeEngagementPanelSwipeRightToDismissEnabled { return YES; }
+- (BOOL)isLandscapeEngagementPanelSwipeRightToDismissEnabled { return YES; } // DEAD (21.x): selector absent; see HOOK_AUDIT.md
 // Remove Video in Playlist By Swiping To The Right
 - (BOOL)enableSwipeToRemoveInPlaylistWatchEp { return YES; }
 // Enable Old-style Minibar For Playlist Panel
@@ -1341,6 +1341,10 @@ static BOOL findCell(ASNodeController *nodeController, NSArray <NSString *> *ide
 - (void)setPausedStateCarouselVisible:(BOOL)arg1 animated:(BOOL)arg2 { ytlBool(@"hideShortsSubscriptions") ? %orig(arg1 = NO, arg2) : %orig; }
 %end
 
+// DEAD (21.x): YTReelWatchPlaybackOverlayView no longer exposes per-button setters -- the Shorts
+// overlay is now driven by element renderers (setActionBarElementRenderer:/setInfoPanelElementRenderer:/
+// setMetapanelElementRenderer:), so all seven hideShorts* toggles below are inactive. Reviving them
+// needs a rewrite against those renderers. See HOOK_AUDIT.md.
 %hook YTReelWatchPlaybackOverlayView
 - (void)setReelLikeButton:(id)arg1 { if (!ytlBool(@"hideShortsLike")) %orig; }
 - (void)setReelDislikeButton:(id)arg1 { if (!ytlBool(@"hideShortsDislike")) %orig; }

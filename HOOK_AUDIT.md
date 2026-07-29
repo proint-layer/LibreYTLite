@@ -42,8 +42,7 @@ gallery, native share) audited clean.
 |---|---|---|---|---|
 | 1 | `YTPlayerViewController loadWithPlayerTransition:playbackConfig:` | `playbackController:didActivateNewPlaybackWithContentVideo:` | queue engagement + auto-quality/fullscreen/speed/captions | high (present); **firing pending device test** |
 | 2 | `YTDataUtils +spamSignalsDictionary` / `+…WithoutIDFA` | `YTAdShieldUtils` (same selectors, `+`) | ad spam-signal stripping (`noAds`) | high |
-| 3 | `YTPlayerViewController singleVideo:currentVideoTimeDidChange:` | `potentiallyMutatedSingleVideo:currentVideoTimeDidChange:` | video **end-time** display + **auto-skip Shorts** | high |
-| 4 | `YTColdConfig videoZoomFreeZoomEnabledGlobalConfig` | `videoZoomFreeZoomEnabled` | Disable Free Zoom (`noFreeZoom`) | high |
+| 3 | `YTColdConfig videoZoomFreeZoomEnabledGlobalConfig` | `videoZoomFreeZoomEnabled` | Disable Free Zoom (`noFreeZoom`) | high |
 
 ## B. Removed — redundant dead lines (a valid sibling already does the job; zero runtime change)
 
@@ -53,6 +52,7 @@ gallery, native share) audited clean.
 | `YTColdConfig mobileShortsTabInlined` + `YTHotConfig enablePlayerBarForVerticalVideoWhenControlsHiddenInFullscreen` | `iosEnableVideoPlayerScrubber` + `shouldAlwaysEnablePlayerBar` (`shortsProgress`) |
 | `YTMainAppVideoPlayerOverlayViewController setPaidContentWithPlayerData:` | `playerOverlayProvider:didInsertPlayerOverlay:` identity check (same block) |
 | `SSOKeychainCore +accessGroup/+sharedAccessGroup` | `SSOKeychainHelper` (valid, same file) |
+| `YTPlayerViewController singleVideo:currentVideoTimeDidChange:` | `potentiallyMutatedSingleVideo:…` twin already hooked in the same block (drives end-time + auto-skip) — the build's redefinition error caught this |
 | `OGLPhenotypeFlagServiceImpl bundleId` | the `NSBundle` bundle-id hooks |
 | `YTPlaybackConfig setEnablePlayerAdUIRendering:` | ads already stripped at `YTIPlayerResponse` |
 
@@ -74,4 +74,10 @@ Settings toggles currently do nothing.
 
 - On-device confirm A#1–4 actually fire (the whole point of the audit was that "present" ≠ "fires").
 - Rename-hunt or retire the category-C toggles (they mislead users as-is).
-- Find the current Shorts-overlay button mechanism if the `hideShorts*` toggles are worth keeping.
+- Revive `hideShorts*` if worth it: `YTReelWatchPlaybackOverlayView` now drives its overlay via
+  element-renderer setters (`setActionBarElementRenderer:`, `setInfoPanelElementRenderer:`,
+  `setMetapanelElementRenderer:`) rather than per-button setters — a rewrite against those is the path.
+
+_Independently re-verified 2026-07-29 by an adversarial subagent scan (110 `%hook` blocks / 171
+methods): all A/B repoint+removal claims confirmed present/absent as stated, build passes, and the
+only remaining dead hooks are exactly the category-C set above (now marked in-code)._
