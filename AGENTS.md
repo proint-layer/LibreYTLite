@@ -121,6 +121,7 @@ Identifiers change across YouTube releases, so re-derive them from the actual bi
 
 The loop for a new hook / feature / bug fix:
 
+0. **Trace what fires.** Build with `-DYTL_POST_DEBUG` and exercise the flow you care about — the **DYNAMIC-ANALYSIS TRACE** section in `YTLite.x` logs every ELM command (`-[ELMController handleCommand:]`), command-responder-event `send`, and player-overlay insert as `TRACE …` lines (inert passthroughs in release). That map — "tap X → command Y with payload Z" — tells you which dispatcher/callback your feature actually hangs off, so step 1 starts from a real target instead of a guess. Extend the trace section with another choke point if your area isn't covered.
 1. **RE first.** Before writing a `%hook`, confirm the class **and the exact selector** exist in the current binary's dump (§7; grep `-[Class selector]` / `+[Class selector]`). If it's a rename or a class cluster, find the real target. Don't trust an old header, an upstream-inherited hook, or a name that "looks right" — re-derive it. (See `HOOK_AUDIT.md` for what happens when you don't: a pile of silent dead hooks.)
 2. **Instrument.** Put `YTLDBG(...)` at the decision points of the new code — the hook entry (did it fire at all?), the branch taken, the values read, the action taken. Log the *why*, not just "reached here".
 3. **Dynamic RE build.** `make clean package DEBUG=0 FINALPACKAGE=1 ADDITIONAL_CFLAGS="-DYTL_POST_DEBUG"`, inject, install.
