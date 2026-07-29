@@ -119,7 +119,8 @@ static void ytlScanAndCacheImages(NSData *data) {
 
 // Spam signals are the fingerprinting blob the app ships with ad requests.
 // Hand back nil and it stops asking about ads with our device in tow.
-%hook YTDataUtils
+// (YT 21.x moved these off YTDataUtils onto YTAdShieldUtils -- both are +class methods.)
+%hook YTAdShieldUtils
 + (id)spamSignalsDictionary { return ytlBool(@"noAds") ? nil : %orig; }
 + (id)spamSignalsDictionaryWithoutIDFA { return ytlBool(@"noAds") ? nil : %orig; }
 %end
