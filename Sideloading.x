@@ -50,9 +50,8 @@ static NSString *accessGroupID() {
 + (NSString *)appName { return YT_NAME; }
 %end
 
-%hook OGLPhenotypeFlagServiceImpl
-- (NSString *)bundleId { return YT_BUNDLE_ID; }
-%end
+// (Removed dead OGLPhenotypeFlagServiceImpl bundleId hook -- that class is gone on 21.x, and the
+// NSBundle bundle-id hooks below already spoof the identifier.)
 
 %hook APMAEU
 + (BOOL)isFAS { return YES; }
@@ -116,16 +115,8 @@ BOOL isSelf() {
 }
 %end
 
-// Fix login for YouTube 17.33.2 and higher
-%hook SSOKeychainCore
-+ (NSString *)accessGroup {
-    return accessGroupID();
-}
-
-+ (NSString *)sharedAccessGroup {
-    return accessGroupID();
-}
-%end
+// (Removed dead SSOKeychainCore accessGroup/sharedAccessGroup -- those +methods are absent on
+// SSOKeychainCore in 21.x; the SSOKeychainHelper block above provides them.)
 
 // Fix App Group Directory by moving it to documents directory
 %hook NSFileManager

@@ -135,9 +135,8 @@ static void ytlScanAndCacheImages(NSData *data) {
 - (void)decorateContext:(id)context { if (!ytlBool(@"noAds")) %orig; }
 %end
 
-%hook YTPlaybackConfig
-- (void)setEnablePlayerAdUIRendering:(BOOL)enable { %orig(ytlBool(@"noAds") ? NO : enable); } // Don't even build the ad UI.
-%end
+// (Removed dead YTPlaybackConfig setEnablePlayerAdUIRendering: -- absent on 21.x, and ads are
+// already stripped at YTIPlayerResponse, so it was redundant belt-and-suspenders that never fired.)
 
 // Belt and suspenders: if an ad break ever does start, swallow it. skipAd is
 // the "skip" button's guts -- no-op it too so a stray break can't wedge.
@@ -831,7 +830,8 @@ static void ytlPresentQueueViewer(void) {
 
 // Hide Paid Promotion Cards
 %hook YTMainAppVideoPlayerOverlayViewController
-- (void)setPaidContentWithPlayerData:(id)data { if (!ytlBool(@"noPromotionCards")) %orig; }
+// (Removed dead setPaidContentWithPlayerData: -- that selector moved to the inline-muted overlay
+// class in 21.x; noPromotionCards is handled by the didInsertPlayerOverlay: identity check below.)
 - (void)playerOverlayProvider:(YTPlayerOverlayProvider *)provider didInsertPlayerOverlay:(YTPlayerOverlay *)overlay {
     if ([[overlay overlayIdentifier] isEqualToString:@"player_overlay_paid_content"] && ytlBool(@"noPromotionCards")) return;
     %orig;
@@ -1132,13 +1132,8 @@ void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video
     }
 }
 
-- (void)singleVideo:(YTSingleVideoController *)video currentVideoTimeDidChange:(YTSingleVideoTime *)time {
-    %orig;
-
-    addEndTime(self, video, time);
-    autoSkipShorts(self, video, time);
-}
-
+// (Removed the dead singleVideo:currentVideoTimeDidChange: twin -- 21.x renamed the observer to
+// potentiallyMutatedSingleVideo:...; the live hook below already drives end-time + auto-skip.)
 - (void)potentiallyMutatedSingleVideo:(YTSingleVideoController *)video currentVideoTimeDidChange:(YTSingleVideoTime *)time {
     %orig;
 
@@ -1315,7 +1310,7 @@ static BOOL findCell(ASNodeController *nodeController, NSArray <NSString *> *ide
 
 // Shorts Progress Bar (https://github.com/PoomSmart/YTShortsProgress)
 %hook YTReelPlayerViewController
-- (BOOL)shouldEnablePlayerBar { return ytlBool(@"shortsProgress") ? YES : NO; }
+// (Removed dead shouldEnablePlayerBar -- absent on 21.x; shouldAlwaysEnablePlayerBar covers it.)
 - (BOOL)shouldAlwaysEnablePlayerBar { return ytlBool(@"shortsProgress") ? YES : NO; }
 - (BOOL)shouldEnablePlayerBarOnlyOnPause { return ytlBool(@"shortsProgress") ? NO : YES; }
 %end
@@ -1331,13 +1326,10 @@ static BOOL findCell(ASNodeController *nodeController, NSArray <NSString *> *ide
 
 %hook YTColdConfig
 - (BOOL)iosEnableVideoPlayerScrubber { return ytlBool(@"shortsProgress") ? YES : NO; }
-- (BOOL)mobileShortsTabInlined { return ytlBool(@"shortsProgress") ? YES : NO; }
-- (BOOL)iosUseSystemVolumeControlInFullscreen { return ytlBool(@"stockVolumeHUD") ? YES : NO; }
+- (BOOL)iosUseSystemVolumeControlInFullscreen { return ytlBool(@"stockVolumeHUD") ? YES : NO; } // DEAD (21.x): flag absent, stockVolumeHUD inactive — see HOOK_AUDIT.md
 %end
-
-%hook YTHotConfig
-- (BOOL)enablePlayerBarForVerticalVideoWhenControlsHiddenInFullscreen { return ytlBool(@"shortsProgress") ? YES : NO; }
-%end
+// (Removed dead mobileShortsTabInlined + the YTHotConfig enablePlayerBarForVerticalVideo… block --
+// both absent on 21.x; shortsProgress is covered by iosEnableVideoPlayerScrubber + shouldAlwaysEnablePlayerBar.)
 
 // Dont Startup Shorts
 %hook YTShortsStartupCoordinatorImpl
