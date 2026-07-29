@@ -600,15 +600,18 @@ static BOOL ytlVideoIsActive(void) {
 // the app backgrounded, same as its autoplay does. `responder` should be something live in
 // the chain (hand it the player VC when you have one). openURL stays as a last-ditch fallback.
 static void ytlPlayVideoID(NSString *videoID, id responder) {
-    if (!videoID.length) return;
+    if (!videoID.length) { YTLDBG(@"play: bail -- empty id"); return; }
     gYTLExpectingQueueLoad = YES; // this navigation is queue-driven; keep the session engaged
     YTICommand *cmd = [%c(YTICommand) watchNavigationEndpointWithVideoID:videoID];
     if (!responder) responder = [%c(YTUIUtils) topViewControllerForPresenting];
+    YTLDBG(@"play: vid=%@ cmd=%d responder=%@ activePlayer=%d", videoID, cmd != nil, [responder class], gYTLPlayer != nil);
     if (cmd && responder) {
         [[%c(YTCommandResponderEvent) eventWithCommand:cmd entry:nil sendClick:YES firstResponder:responder] send];
+        YTLDBG(@"play: sent watch-nav command");
         return;
     }
     NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"vnd.youtube://%@", videoID]];
+    YTLDBG(@"play: no cmd/responder -> openURL %@ canOpen=%d", url, url ? [[UIApplication sharedApplication] canOpenURL:url] : 0);
     if (url && [[UIApplication sharedApplication] canOpenURL:url])
         [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
 }
@@ -2445,23 +2448,16 @@ static BOOL ytlDescIsPost(NSString *desc) {
     } else {
         [sheet addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"AddToQueue") iconImage:YTImageNamed(@"yt_outline_list_queue_24pt") style:0 handler:^ {
             [q enqueue:videoID];
-            BOOL active = ytlVideoIsActive();
-            YTLDBG(@"queue add: added=%@ active=%d gYTLPlayer=%p playerVid=%@", videoID, active, gYTLPlayer, gYTLPlayer.contentVideoID);
-            if (active) {
-                // Something's already playing -- do NOT interrupt it (that was the old "too
-                // aggressive" bug). Just queue, and engage so the session drains into the queue
-                // when the current video ends (auto-continue).
-                gYTLQueueEngaged = YES;
-                NSString *msg = [NSString stringWithFormat:@"%@ (%lu)", LOC(@"AddedToQueue"), (unsigned long)q.count];
-                // Quick flash (~0.8s) -- "Added to queue" doesn't need to linger like the default ~4s.
-                [[%c(YTToastResponderEvent) eventWithMessage:msg infoType:0 duration:0.8 firstResponder:responder] send];
-            } else {
-                // Nothing playing -- the added video is effectively the head of the queue, so start
-                // it now. This is NOT the old aggression (there's no active video to hijack); it's
-                // just the queue beginning. Playing it engages the session, so the rest auto-continues.
-                NSString *head = [q dequeue];
-                dispatch_async(dispatch_get_main_queue(), ^{ ytlPlayVideoID(head, responder); });
-            }
+            // Always append -- never take over playback. YouTube parks a video in the miniplayer
+            // after anything plays, so "is a video playing?" can't cleanly gate "should I start one"
+            // (the parked player reads as active forever). So Add-to-queue only ever queues: if a
+            // video is currently active, engage so the queue auto-continues when it ends; otherwise
+            // it just waits until you start it from the queue viewer (tap an item).
+            if (ytlVideoIsActive()) gYTLQueueEngaged = YES;
+            YTLDBG(@"queue add: added=%@ engaged=%d count=%lu", videoID, gYTLQueueEngaged, (unsigned long)q.count);
+            NSString *msg = [NSString stringWithFormat:@"%@ (%lu)", LOC(@"AddedToQueue"), (unsigned long)q.count];
+            // Quick flash (~0.8s) -- "Added to queue" doesn't need to linger like the default ~4s.
+            [[%c(YTToastResponderEvent) eventWithMessage:msg infoType:0 duration:0.8 firstResponder:responder] send];
         }]];
     }
 
