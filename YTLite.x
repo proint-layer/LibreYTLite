@@ -582,7 +582,15 @@ static NSMutableArray *ytlFilteredSections(NSArray *array) {
 static __weak YTPlayerViewController *gYTLPlayer;
 static BOOL gYTLQueueEngaged;
 static BOOL gYTLExpectingQueueLoad;
-static BOOL ytlVideoIsActive(void) { return gYTLPlayer != nil && gYTLPlayer.viewIfLoaded.window != nil; }
+// A video is "active" (open, full-screen or in the miniplayer) when we hold a live player whose
+// content video is set. gYTLPlayer is latched in didActivateNewPlaybackWithContentVideo: below --
+// the OLD latch point, loadWithPlayerTransition:playbackConfig:, was removed from this class in
+// YT 21.x, so it never fired and gYTLPlayer stayed nil (which is why adds always "hijacked").
+static NSString *gYTLLastActiveVID;   // de-dupes repeat activate callbacks for the same video
+static BOOL ytlVideoIsActive(void) {
+    YTPlayerViewController *p = gYTLPlayer;
+    return p != nil && p.contentVideoID.length > 0;
+}
 
 // Play a video by ID. This used to just open vnd.youtube://ID -- clean, but it DIED in
 // the background: iOS won't let a backgrounded app open a URL, so with the screen off the
@@ -988,12 +996,21 @@ void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video
 }
 
 %hook YTPlayerViewController
-- (void)loadWithPlayerTransition:(id)arg1 playbackConfig:(id)arg2 {
+// YT 21.x removed loadWithPlayerTransition:playbackConfig: from this class, so our old hook there
+// silently died -- gYTLPlayer never got set (breaking the queue's "is anything playing?" check)
+// and the per-video auto-* features below stopped running. This callback is the live replacement:
+// it fires when a new content video becomes active. Repeat calls for the same video are ignored.
+- (void)playbackController:(id)arg1 didActivateNewPlaybackWithContentVideo:(id)arg2 {
     %orig;
 
-    gYTLPlayer = self; // remember the live player so the queue knows if anything's playing
-    // Engage the queue only for videos WE started; any other load (the user opened something
-    // else, or came back later) disengages, so a stale queue can't hijack unrelated playback.
+    gYTLPlayer = self; // latch the live player so the queue knows a video is open
+    NSString *vid = self.contentVideoID;
+    YTLDBG(@"activate: self=%p vid=%@ expecting=%d", self, vid, gYTLExpectingQueueLoad);
+    if ([vid isEqualToString:gYTLLastActiveVID]) return; // same video re-activating -- nothing to do
+    gYTLLastActiveVID = [vid copy];
+
+    // Engage the queue only for videos WE started from it; any other new video (the user opened
+    // something else) disengages, so a stale queue can't hijack unrelated playback.
     if (gYTLExpectingQueueLoad) { gYTLExpectingQueueLoad = NO; gYTLQueueEngaged = YES; }
     else gYTLQueueEngaged = NO;
 
@@ -1009,6 +1026,7 @@ void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video
 // autoplay toggle says -- a queue you built by hand should drain even with autoplay off.
 - (void)playbackControllerDidFinishPlayback:(id)arg1 {
     %orig;
+    YTLDBG(@"finish: engaged=%d count=%lu", gYTLQueueEngaged, (unsigned long)[YTLQueueManager shared].count);
     // Only advance while the session is engaged with the queue (see gYTLQueueEngaged) -- so
     // exiting mid-queue and later finishing an unrelated video doesn't get hijacked.
     if (!ytlBool(@"enableQueue") || !gYTLQueueEngaged || ![YTLQueueManager shared].count) return;
@@ -2429,14 +2447,24 @@ static BOOL ytlDescIsPost(NSString *desc) {
         }]];
     } else {
         [sheet addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"AddToQueue") iconImage:YTImageNamed(@"yt_outline_list_queue_24pt") style:0 handler:^ {
-            // "Add to queue" ALWAYS just queues -- it never hijacks the player. If a video is
-            // playing, engage so the queue follows it; if nothing's playing it just waits in the
-            // queue until you start it from View queue (tap an item).
             [q enqueue:videoID];
-            if (ytlVideoIsActive()) gYTLQueueEngaged = YES;
-            NSString *msg = [NSString stringWithFormat:@"%@ (%lu)", LOC(@"AddedToQueue"), (unsigned long)q.count];
-            // Quick flash (~0.8s) -- "Added to queue" doesn't need to linger like the default ~4s.
-            [[%c(YTToastResponderEvent) eventWithMessage:msg infoType:0 duration:0.8 firstResponder:responder] send];
+            BOOL active = ytlVideoIsActive();
+            YTLDBG(@"queue add: added=%@ active=%d gYTLPlayer=%p playerVid=%@", videoID, active, gYTLPlayer, gYTLPlayer.contentVideoID);
+            if (active) {
+                // Something's already playing -- do NOT interrupt it (that was the old "too
+                // aggressive" bug). Just queue, and engage so the session drains into the queue
+                // when the current video ends (auto-continue).
+                gYTLQueueEngaged = YES;
+                NSString *msg = [NSString stringWithFormat:@"%@ (%lu)", LOC(@"AddedToQueue"), (unsigned long)q.count];
+                // Quick flash (~0.8s) -- "Added to queue" doesn't need to linger like the default ~4s.
+                [[%c(YTToastResponderEvent) eventWithMessage:msg infoType:0 duration:0.8 firstResponder:responder] send];
+            } else {
+                // Nothing playing -- the added video is effectively the head of the queue, so start
+                // it now. This is NOT the old aggression (there's no active video to hijack); it's
+                // just the queue beginning. Playing it engages the session, so the rest auto-continues.
+                NSString *head = [q dequeue];
+                dispatch_async(dispatch_get_main_queue(), ^{ ytlPlayVideoID(head, responder); });
+            }
         }]];
     }
 
