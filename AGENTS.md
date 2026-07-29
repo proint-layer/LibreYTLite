@@ -114,3 +114,17 @@ Identifiers change across YouTube releases, so re-derive them from the actual bi
 - `ipsw macho info --objc <YouTube binary>` — dumps the Objective-C class/protocol/method layout (the primary way to confirm a class name, selector, or property before hooking it). `otool` (`-ov`, `-L`, `-s __TEXT __cstring`) covers ObjC sections, linked libraries, and embedded C strings.
 - Cross-check against PoomSmart's YouTubeHeader, which tracks many of these across versions.
 - Do **not** try to lift identifiers from the closed YTLite 5.x binary: it XOR-obfuscates its strings, so they won't appear in a plain dump. Rebuild them from the clean, live YouTube binary instead — consistent with this fork's from-source, no-obfuscation stance.
+
+## 8. Instrument-and-verify — the pipeline for any hook or feature
+
+**A hook that compiles is not a hook that works.** Logos + `-Werror` only prove the code is well-formed — nothing about whether the selector exists on the class at runtime, whether the hook fires, or whether it does the right thing. This tweak has repeatedly shipped hooks that silently never ran: a selector that was renamed/removed (`loadWithPlayerTransition:playbackConfig:` off `YTPlayerViewController`), a class cluster where the real object is a private subclass (`UIPasteboard` → `_UIConcretePasteboard`), a callback that simply doesn't fire. **Static verification proves a hook _can_ fire; only an on-device log proves it _does_.** Treat every new hook or behavior change as unverified until you've watched it in the log — and never tell the user something is "fixed" on the strength of a compile.
+
+The loop for a new hook / feature / bug fix:
+
+1. **RE first.** Before writing a `%hook`, confirm the class **and the exact selector** exist in the current binary's dump (§7; grep `-[Class selector]` / `+[Class selector]`). If it's a rename or a class cluster, find the real target. Don't trust an old header, an upstream-inherited hook, or a name that "looks right" — re-derive it. (See `HOOK_AUDIT.md` for what happens when you don't: a pile of silent dead hooks.)
+2. **Instrument.** Put `YTLDBG(...)` at the decision points of the new code — the hook entry (did it fire at all?), the branch taken, the values read, the action taken. Log the *why*, not just "reached here".
+3. **Dynamic RE build.** `make clean package DEBUG=0 FINALPACKAGE=1 ADDITIONAL_CFLAGS="-DYTL_POST_DEBUG"`, inject, install.
+4. **Read the log on-device.** `log stream --predicate 'eventMessage CONTAINS "YTLITE"'` (or Console.app filtered on `YTLITE`). Confirm the hook fires and the branches/values are what you expected. **A line you expected but don't see means the hook didn't fire — go back to step 1**, don't paper over it.
+5. **Ship clean.** Rebuild *without* `-DYTL_POST_DEBUG` (`YTLDBG` compiles to nothing) and confirm **0 `[YTLITE]` strings** in the shipped dylib. Leave the `YTLDBG` calls in the source — they cost nothing in release and are the instrumentation for the next change.
+
+Jumping straight to a clean build and asserting "fixed" is exactly how silent dead hooks ship. When in doubt, log it and look.
