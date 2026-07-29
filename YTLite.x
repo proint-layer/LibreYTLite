@@ -836,6 +836,7 @@ static void ytlPresentQueueViewer(void) {
 // (Removed dead setPaidContentWithPlayerData: -- that selector moved to the inline-muted overlay
 // class in 21.x; noPromotionCards is handled by the didInsertPlayerOverlay: identity check below.)
 - (void)playerOverlayProvider:(YTPlayerOverlayProvider *)provider didInsertPlayerOverlay:(YTPlayerOverlay *)overlay {
+    YTLDBG(@"TRACE overlay.insert  %@", [overlay overlayIdentifier]);
     if ([[overlay overlayIdentifier] isEqualToString:@"player_overlay_paid_content"] && ytlBool(@"noPromotionCards")) return;
     %orig;
 }
@@ -2960,8 +2961,55 @@ static NSURL *newCoverURL(NSURL *originalURL) {
 }
 %end
 
+// ============================================================================
+// DYNAMIC-ANALYSIS TRACE (debug-only logging; see AGENTS.md §8)
+// ============================================================================
+// Standing harness for the recurring "what actually fires?" question. Modern YouTube
+// funnels most user actions through a couple of central dispatchers -- ELM commands
+// and command-responder events -- so tracing THOSE shows, in one log, which command a
+// tap/copy/share/navigation produces (the exact thing that cost multiple round-trips
+// on share, copy-link, and the queue). Each hook is a plain passthrough whose only
+// effect is a YTLDBG line; YTLDBG compiles to nothing in release, so shipped builds get
+// an inert passthrough and zero [YTLITE] output. Build with -DYTL_POST_DEBUG and read
+// the `TRACE` lines to map a flow before you hook it.
+//
+// Deliberately NOT in a %group: a named group in this file disables the auto-%init of
+// the ~100 ungrouped hooks (needs a matching bare %init;), and bricking the whole tweak
+// isn't worth it for a diagnostic. Ungrouped passthroughs cost a negligible objc hop.
+
+@interface ELMController : NSObject
+- (void)handleCommand:(id)command;
+- (void)handleCommand:(id)command additionalSenderState:(id)state;
+@end
+@interface YTAccountScopedCommandResponderEvent : NSObject @end
+
+#if defined(YTL_POST_DEBUG)
+// One-line label for a traced object: class + a trimmed, newline-flattened description
+// (reveals the concrete command type / payload even when it's a wrapped YTICommand).
+static NSString *ytlLabel(id o) {
+    if (!o) return @"nil";
+    NSString *d = [o respondsToSelector:@selector(description)] ? [o description] : @"";
+    d = [d stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+    if (d.length > 160) d = [[d substringToIndex:160] stringByAppendingString:@"…"];
+    return [NSString stringWithFormat:@"%@  %@", [o class], d];
+}
+#endif
+
+%hook ELMController
+- (void)handleCommand:(id)command { YTLDBG(@"TRACE elm.handleCommand  %@", ytlLabel(command)); %orig; }
+- (void)handleCommand:(id)command additionalSenderState:(id)state { YTLDBG(@"TRACE elm.handleCommand+state  %@", ytlLabel(command)); %orig; }
+%end
+
+%hook YTCommandResponderEvent
+- (void)send { YTLDBG(@"TRACE responder.send  %@", [self class]); %orig; }
+%end
+
+%hook YTAccountScopedCommandResponderEvent
+- (void)send { YTLDBG(@"TRACE responder.send(acct)  %@", [self class]); %orig; }
+%end
+
 %ctor {
-    YTLDBG(@"YTLite loaded (pasteboard diagnostics build); noShareChunk=%d", ytlBool(@"noShareChunk"));
+    YTLDBG(@"YTLite loaded (debug build)");
 
     if (ytlBool(@"shortsOnlyMode") && (ytlBool(@"removeShorts") || ytlBool(@"reExplore"))) {
         ytlSetBool(NO, @"removeShorts");
