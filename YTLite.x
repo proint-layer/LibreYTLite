@@ -34,6 +34,21 @@ static UIImage *YTImageNamed(NSString *imageName) {
     return [UIImage imageNamed:imageName inBundle:[NSBundle mainBundle] compatibleWithTraitCollection:nil];
 }
 
+// imageNamed: returns nil for asset names absent from Assets.car -- and several classic
+// yt_outline_* aliases simply aren't in every YouTube build (in 21.25.5 list_view survives but
+// list_queue/list_remove are gone). A nil icon collapses a menu sheet's icon column and shifts
+// every other row left (the "Add to queue" offset bug), so resolve to the first name that
+// actually loads, with an SF Symbol backstop that always does. Logs the winner for RE.
+static UIImage *ytlMenuIcon(NSArray<NSString *> *names, NSString *sfFallback) {
+    for (NSString *n in names) {
+        UIImage *img = YTImageNamed(n);
+        if (img) { YTLDBG(@"menu-icon: '%@' %@", n, NSStringFromCGSize(img.size)); return img; }
+    }
+    UIImage *sf = [UIImage systemImageNamed:sfFallback];
+    YTLDBG(@"menu-icon: SF '%@' %@", sfFallback, sf ? NSStringFromCGSize(sf.size) : @"nil");
+    return sf;
+}
+
 // --- Multi-image community post cache ------------------------------------------------
 // A post with a swipeable gallery is one EML element whose bytes list every image URL.
 // Trouble is, the extra images render LAZILY -- at the moment you tap, only the first one
@@ -493,9 +508,12 @@ static NSMutableArray *ytlFilteredSections(NSArray *array) {
 // upsell command baked in -- there's no client-side queue action to hook, no flag
 // to flip. Verified the hard way (RE'd the binary, traced the commands on device).
 // So forget theirs -- here's ours:
-//   * long-press a feed video thumbnail -> "Add to queue"  (ytlQueueLongPress)
-//   * the video ID falls right out of the thumbnail URL, i.ytimg.com/vi/<ID>/ --
-//     no need to dig through the cell's guts (they're empty at press time anyway)
+//   * an "Add to queue" / "View queue" row injected into YouTube's OWN ⋯ / long-press menu
+//     (ytlInjectQueueActions), on every surface incl. the channel-Videos grid -- we RE'd the
+//     menu-build choke point (-[YTMenuController actionsForRenderers:]) to get there; see
+//     re/ELM_RE.md. (This replaced a per-cell long-press gesture that only reached home/search.)
+//   * the video ID falls right out of the cell thumbnail URL, i.ytimg.com/vi/<ID>/ --
+//     no need to parse protobufs or dig through the cell's guts
 //   * when a video ends we just play the next one  (playbackControllerDidFinishPlayback:)
 //     by opening vnd.youtube://<ID>, the same deep-link the app uses on itself.
 // It's in-memory and deduped. So is theirs -- neither survives a relaunch.
@@ -1501,6 +1519,83 @@ static NSURL *findImageURLInNode(ASDisplayNode *node, int depth) {
     return nil;
 }
 
+// -- QUEUE: inject "Add to queue" into YouTube's own menu ---------------------
+// ELM RE (re/ELM_RE.md) proved every ⋯/long-press video menu, on every surface INCLUDING
+// the channel-Videos grid, funnels through -[YTMenuController actionsForRenderers:…], which
+// returns the sheet's action list. So rather than fight per-cell gesture arbitration (the
+// old long-press only ever reached YTVideoWithContextNode home/search cells), we append our
+// own row to that list. It shows up wherever the native menu does.
+
+// Walk a node subtree for the first image URL that resolves to a watch-video ID
+// (i.ytimg.com/vi/<ID>/) — skips channel avatars (yt3.ggpht.com), which yield no ID. Unlike
+// findImageURLInNode (first image, possibly the avatar) this keeps going until it finds a video.
+static NSString *ytlVideoIDInNode(ASDisplayNode *node, int depth) {
+    if (!node || depth > 14) return nil;
+    NSString *vid = ytlVideoIDFromThumbnailURL(nodeImageURL(node));
+    if (vid) return vid;
+    for (ASDisplayNode *child in node.yogaChildren) { NSString *v = ytlVideoIDInNode(child, depth + 1); if (v) return v; }
+    if ([node respondsToSelector:@selector(subnodes)]) {
+        for (ASDisplayNode *child in [node valueForKey:@"subnodes"]) { NSString *v = ytlVideoIDInNode(child, depth + 1); if (v) return v; }
+    }
+    return nil;
+}
+
+// From the view a menu is anchored to (the ⋯ button, or the pressed cell on long-press),
+// climb to the owning ASDK cell node and read the video ID from its thumbnail. Cell class
+// is irrelevant — the menu funnels through YTMenuController on all of them.
+static NSString *ytlVideoIDForAnchorView(UIView *view) {
+    for (UIView *v = view; v; v = v.superview) {
+        if ([v respondsToSelector:@selector(keepalive_node)]) {
+            NSString *vid = ytlVideoIDInNode((ASDisplayNode *)[(id)v keepalive_node], 0);
+            if (vid) return vid;
+        }
+    }
+    return nil;
+}
+
+// Append our queue row(s) to the action list YTMenuController built for a video's menu.
+// Mirrors the old long-press sheet (Add/Remove + View queue) but sourced from the menu anchor.
+static id ytlInjectQueueActions(id actions, UIView *fromView, id responder) {
+    if (!ytlBool(@"enableQueue") || ![actions isKindOfClass:[NSArray class]]) return actions;
+    NSString *videoID = ytlVideoIDForAnchorView(fromView);
+    YTLDBG(@"menu-queue: fromView=%@ videoID=%@", [fromView class], videoID);
+    if (!videoID.length) return actions;   // not a video menu (comment/channel/other overflow)
+
+    YTLQueueManager *q = [YTLQueueManager shared];
+    if (!responder) responder = [%c(YTUIUtils) topViewControllerForPresenting];
+    NSMutableArray *out = [actions mutableCopy];
+
+    if ([q contains:videoID]) {
+        [out addObject:[%c(YTActionSheetAction) actionWithTitle:LOC(@"RemoveFromQueue") iconImage:ytlMenuIcon(@[@"ic_remove_circle_outline"], @"minus.circle") style:0 handler:^{
+            [q remove:videoID];
+        }]];
+    } else {
+        [out addObject:[%c(YTActionSheetAction) actionWithTitle:LOC(@"AddToQueue") iconImage:ytlMenuIcon(@[@"youtube_outline/list_queue_24pt", @"ic_add_to_queue"], @"text.badge.plus") style:0 handler:^{
+            [q enqueue:videoID];
+            if (ytlVideoIsActive()) gYTLQueueEngaged = YES;   // auto-continue only if something's already playing
+            NSString *msg = [NSString stringWithFormat:@"%@ (%lu)", LOC(@"AddedToQueue"), (unsigned long)q.count];
+            [[%c(YTToastResponderEvent) eventWithMessage:msg infoType:0 duration:0.8 firstResponder:responder] send];
+        }]];
+    }
+    if (q.count) {
+        [out addObject:[%c(YTActionSheetAction) actionWithTitle:[NSString stringWithFormat:@"%@ (%lu)", LOC(@"ViewQueue"), (unsigned long)q.count] iconImage:ytlMenuIcon(@[@"yt_outline_list_view_24pt", @"youtube_outline/list_view_24pt"], @"list.bullet") style:0 handler:^{
+            ytlPresentQueueViewer();
+        }]];
+    }
+    YTLDBG(@"menu-queue: appended (contains=%d count=%lu total=%lu)", [q contains:videoID], (unsigned long)q.count, (unsigned long)out.count);
+    return out;
+}
+
+@interface YTMenuController : NSObject @end
+%hook YTMenuController
+// Only the shouldLogItems: variant — it is the one that fired on every traced surface (home ⋯,
+// home long-press, channel-Videos ⋯ + long-press). Hooking the sibling too would double-append
+// if one calls the other.
+- (id)actionsForRenderers:(id)renderers fromView:(UIView *)view entry:(id)entry shouldLogItems:(BOOL)items firstResponder:(id)responder {
+    return ytlInjectQueueActions(%orig, view, responder);
+}
+%end
+
 // Getting permission to save a photo, the annoying way. YouTube's Info.plist has the
 // read-write Photos key but NOT the add-only one -- so the easy calls are off the table.
 // WARNING: do NOT use UIImageWriteToSavedPhotosAlbum here; with no add-only description
@@ -2320,20 +2415,9 @@ static BOOL ytlDescIsPost(NSString *desc) {
         }
     }
 
-    // Queue: attach a long-press to feed video cells (home/search use YTVideoWithContextNode)
-    // so it can offer "Add to queue". The videoID is read from the thumbnail URL at press time.
-    if (ytlBool(@"enableQueue") && [desc containsString:@"YTVideoWithContextNode"]) {
-        BOOL already = NO;
-        for (UIGestureRecognizer *gr in self.gestureRecognizers) {
-            if ([gr.name isEqualToString:@"YTLQueue"]) { already = YES; break; }
-        }
-        if (!already) {
-            UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(ytlQueueLongPress:)];
-            ytlConfigureLongPress(longPress);
-            longPress.name = @"YTLQueue";
-            [self addGestureRecognizer:longPress];
-        }
-    }
+    // (Queue no longer attaches a long-press gesture here. The "Add to queue" row is injected
+    // into YouTube's OWN ⋯/long-press menu via -[YTMenuController actionsForRenderers:] above,
+    // which reaches every surface — incl. the channel-Videos grid this gesture never could.)
 }
 
 %new
@@ -2421,56 +2505,6 @@ static BOOL ytlDescIsPost(NSString *desc) {
 }
 
 // The one entry point for the whole queue: hold a feed video and up comes our menu
-// -- Add (or Remove, if it's already in), and View queue once there's something in it.
-// WARNING: we can't fold YouTube's own long-press menu in here. On these cells that
-// menu lives inside AsyncDisplayKit and only fires from a LIVE gesture -- there's no
-// method to call to summon it after the fact (believe me, I looked). Its actions
-// still live on the cell's ⋯ button, so nothing's actually lost.
-%new
-- (void)ytlQueueLongPress:(UILongPressGestureRecognizer *)sender {
-    if (sender.state != UIGestureRecognizerStateBegan) return;
-    if (ytlEnclosingScrollActive(self)) return; // ignore holds that begin a scroll
-
-    ytlSuppressAncestorTaps(self); // our menu wins — suppress the cell's tap + native long-press
-
-    NSURL *thumb = ytlImageURLForView(self, [sender locationInView:self])
-                   ?: findImageURLInNode((ASDisplayNode *)self.keepalive_node, 0);
-    NSString *videoID = ytlVideoIDFromThumbnailURL(thumb);
-    if (!videoID.length) return;
-
-    YTLQueueManager *q = [YTLQueueManager shared];
-    id responder = [%c(YTUIUtils) topViewControllerForPresenting];
-    YTDefaultSheetController *sheet = [%c(YTDefaultSheetController) sheetControllerWithParentResponder:nil];
-
-    if ([q contains:videoID]) {
-        [sheet addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"RemoveFromQueue") iconImage:YTImageNamed(@"yt_outline_list_remove_24pt") style:0 handler:^ {
-            [q remove:videoID];
-        }]];
-    } else {
-        [sheet addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"AddToQueue") iconImage:YTImageNamed(@"yt_outline_list_queue_24pt") style:0 handler:^ {
-            [q enqueue:videoID];
-            // Always append -- never take over playback. YouTube parks a video in the miniplayer
-            // after anything plays, so "is a video playing?" can't cleanly gate "should I start one"
-            // (the parked player reads as active forever). So Add-to-queue only ever queues: if a
-            // video is currently active, engage so the queue auto-continues when it ends; otherwise
-            // it just waits until you start it from the queue viewer (tap an item).
-            if (ytlVideoIsActive()) gYTLQueueEngaged = YES;
-            YTLDBG(@"queue add: added=%@ engaged=%d count=%lu", videoID, gYTLQueueEngaged, (unsigned long)q.count);
-            NSString *msg = [NSString stringWithFormat:@"%@ (%lu)", LOC(@"AddedToQueue"), (unsigned long)q.count];
-            // Quick flash (~0.8s) -- "Added to queue" doesn't need to linger like the default ~4s.
-            [[%c(YTToastResponderEvent) eventWithMessage:msg infoType:0 duration:0.8 firstResponder:responder] send];
-        }]];
-    }
-
-    if (q.count) {
-        [sheet addAction:[%c(YTActionSheetAction) actionWithTitle:[NSString stringWithFormat:@"%@ (%lu)", LOC(@"ViewQueue"), (unsigned long)q.count] iconImage:YTImageNamed(@"yt_outline_list_view_24pt") style:0 handler:^ {
-            ytlPresentQueueViewer();
-        }]];
-    }
-
-    [sheet presentFromViewController:responder animated:YES completion:nil];
-}
-
 %new
 - (void)commentManager:(UILongPressGestureRecognizer *)sender {
     if (sender.state == UIGestureRecognizerStateBegan) {

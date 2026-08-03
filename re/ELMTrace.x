@@ -51,11 +51,6 @@ static NSString *elmtStr(id o) {
     return [NSString stringWithFormat:@"%@ | %@", [o class], d];
 }
 
-// Element count of an actions/renderers collection, without assuming the concrete class.
-static NSString *elmtCount(id collection) {
-    return [collection respondsToSelector:@selector(count)] ? [NSString stringWithFormat:@"%lu", (unsigned long)[collection count]] : @"?";
-}
-
 %group gELMTrace
 
 // -- MENU CONSTRUCTION -------------------------------------------------------
@@ -65,25 +60,18 @@ static NSString *elmtCount(id collection) {
 // YTIMenuRenderer mutation becomes a viable injection point. If a menu appears with NO line
 // here, it does NOT go through YTMenuController — a decisive negative result worth knowing.
 //
-// showMenu* has 7 overloads; we trace 2. Whichever overload is the entry point, it calls
-// actionsForRenderers: internally to build the item list — so actionsForRenderers is the
-// reliable catch-all, and its count tells us how many items the sheet was built from.
+// showMenu* has 7 overloads; we trace 2. The `%@` payload is the YTIMenuRenderer proto — it
+// lists the menu's items, so you can see exactly what the sheet is built from.
+//
+// NOTE: -actionsForRenderers: was traced here originally to confirm the menu funnel. That's
+// now settled AND the shipped queue feature hooks that same selector in YTLite.x
+// (ytlInjectQueueActions), so tracing it here too would be a duplicate-symbol clash — removed.
 %hook YTMenuController
 - (void)showMenuWithMenuRenderer:(id)renderer fromView:(id)view entry:(id)entry firstResponder:(id)responder {
     ELMT(@"MENU.show(4)  %@", elmtStr(renderer)); %orig;
 }
 - (void)showMenuWithMenuRenderer:(id)renderer fromView:(id)view entry:(id)entry dismissalBlock:(id)block addCancelAction:(BOOL)cancel shouldLogItems:(BOOL)logItems firstResponder:(id)responder completion:(id)completion {
     ELMT(@"MENU.show(8)  %@", elmtStr(renderer)); %orig;
-}
-- (id)actionsForRenderers:(id)renderers fromView:(id)view entry:(id)entry firstResponder:(id)responder {
-    id out = %orig;
-    ELMT(@"MENU.actions  items=%@  renderers=%@", elmtCount(out), [renderers class]);
-    return out;
-}
-- (id)actionsForRenderers:(id)renderers fromView:(id)view entry:(id)entry shouldLogItems:(BOOL)items firstResponder:(id)responder {
-    id out = %orig;
-    ELMT(@"MENU.actions/log  items=%@  renderers=%@", elmtCount(out), [renderers class]);
-    return out;
 }
 %end
 
