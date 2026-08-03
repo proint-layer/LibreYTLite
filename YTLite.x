@@ -2965,39 +2965,33 @@ static NSURL *newCoverURL(NSURL *originalURL) {
 // DYNAMIC-ANALYSIS TRACE (debug-only logging; see AGENTS.md §8)
 // ============================================================================
 // Standing harness for the recurring "what actually fires?" question. Modern YouTube
-// funnels most user actions through a couple of central dispatchers -- ELM commands
-// and command-responder events -- so tracing THOSE shows, in one log, which command a
-// tap/copy/share/navigation produces (the exact thing that cost multiple round-trips
-// on share, copy-link, and the queue). Each hook is a plain passthrough whose only
-// effect is a YTLDBG line; YTLDBG compiles to nothing in release, so shipped builds get
-// an inert passthrough and zero [YTLITE] output. Build with -DYTL_POST_DEBUG and read
-// the `TRACE` lines to map a flow before you hook it.
+// funnels most user actions through a couple of central dispatchers -- ELM commands and
+// command-responder events -- so tracing THOSE shows, in one log, which PATH a
+// tap/copy/share/navigation takes (the exact thing that cost multiple round-trips on
+// share, copy-link, and the queue). Note the ELM `command` is an opaque C++ pointer here,
+// so this only proves the path fired; for the concrete command OBJECT and the ELM menu/
+// touch machinery, use the dedicated ELM RE harness in ELMTrace.x (-DYTL_ELM_RE) and its
+// map in ELM_RE.md. Each hook is a plain passthrough whose only effect is a YTLDBG line;
+// YTLDBG compiles to nothing in release, so shipped builds get an inert passthrough and
+// zero [YTLITE] output. Build with -DYTL_POST_DEBUG and read the `TRACE` lines.
 //
 // Deliberately NOT in a %group: a named group in this file disables the auto-%init of
 // the ~100 ungrouped hooks (needs a matching bare %init;), and bricking the whole tweak
 // isn't worth it for a diagnostic. Ungrouped passthroughs cost a negligible objc hop.
 
 @interface ELMController : NSObject
-- (void)handleCommand:(id)command;
-- (void)handleCommand:(id)command additionalSenderState:(id)state;
+// NB: `command` crosses the C++/ObjC boundary as a raw pointer (const void *), NOT an id —
+// verified via `ipsw class-dump`. Introspecting it as an object here crashes.
+- (void)handleCommand:(const void *)command;
+- (void)handleCommand:(const void *)command additionalSenderState:(void *)state;
 @end
 @interface YTAccountScopedCommandResponderEvent : NSObject @end
 
-#if defined(YTL_POST_DEBUG)
-// One-line label for a traced object: class + a trimmed, newline-flattened description
-// (reveals the concrete command type / payload even when it's a wrapped YTICommand).
-static NSString *ytlLabel(id o) {
-    if (!o) return @"nil";
-    NSString *d = [o respondsToSelector:@selector(description)] ? [o description] : @"";
-    d = [d stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
-    if (d.length > 160) d = [[d substringToIndex:160] stringByAppendingString:@"…"];
-    return [NSString stringWithFormat:@"%@  %@", [o class], d];
-}
-#endif
-
 %hook ELMController
-- (void)handleCommand:(id)command { YTLDBG(@"TRACE elm.handleCommand  %@", ytlLabel(command)); %orig; }
-- (void)handleCommand:(id)command additionalSenderState:(id)state { YTLDBG(@"TRACE elm.handleCommand+state  %@", ytlLabel(command)); %orig; }
+// The concrete ObjC command object is observable one layer down at YTELMDispatcher
+// (dispatchCommand:), which ELMTrace.x traces; here we can only confirm the path fired.
+- (void)handleCommand:(const void *)command { YTLDBG(@"TRACE elm.handleCommand (fired)"); %orig; }
+- (void)handleCommand:(const void *)command additionalSenderState:(void *)state { YTLDBG(@"TRACE elm.handleCommand+state (fired)"); %orig; }
 %end
 
 %hook YTCommandResponderEvent

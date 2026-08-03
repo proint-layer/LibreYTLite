@@ -127,3 +127,5 @@ The loop for a new hook / feature / bug fix:
 5. **Ship clean.** Rebuild *without* `-DYTL_POST_DEBUG` (`YTLDBG` compiles to nothing) and confirm **0 `[YTLITE]` strings** in the shipped dylib. Leave the `YTLDBG` calls in the source — they cost nothing in release and are the instrumentation for the next change.
 
 Jumping straight to a clean build and asserting "fixed" is exactly how silent dead hooks ship. When in doubt, log it and look.
+
+**Worked example — the ELM subsystem.** `re/ELM_RE.md` maps YouTube's ELM (Element) UI framework (the kebab menu, feed cells, cell long-press menus) and `re/ELMTrace.x` is a dedicated dynamic-validation harness for it (opt-in: `make package ELM_RE=1`; excluded from all normal builds). It also captures a step-1 lesson worth internalizing: **verify argument *types*, not just selectors.** The ELM command object crosses the C++/ObjC boundary as a `const void *` on `ELMController`/`ELMCommandResolver` — hooking it as `(id)` and messaging it crashes. `ipsw class-dump <MachO> --class '^Name$'` gives typed signatures; the plain `--objc` dump does not.
