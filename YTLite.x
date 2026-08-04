@@ -657,11 +657,62 @@ static NSString *ytlVideoIDFromThumbnailURL(NSURL *url) {
     return nil;
 }
 
+// A YT-style compact-video row for the queue: 16:9 rounded thumbnail on the left, 2-line
+// title + channel name on the right. We can't reuse YouTube's real cell (its YTICompact-
+// VideoRenderer only builds from a full video model, never a bare videoID -- see the RE
+// notes), so we mimic the look with plain UIKit. Semantic colors so it tracks light/dark.
+@interface YTLQueueCell : UITableViewCell
+@property (nonatomic, strong) UIImageView *thumb;
+@property (nonatomic, strong) UILabel *titleLabel;
+@property (nonatomic, strong) UILabel *channelLabel;
+@end
+@implementation YTLQueueCell
+- (instancetype)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)rid {
+    if ((self = [super initWithStyle:style reuseIdentifier:rid])) {
+        self.selectionStyle = UITableViewCellSelectionStyleDefault;
+        _thumb = [UIImageView new];
+        _thumb.contentMode = UIViewContentModeScaleAspectFill;
+        _thumb.clipsToBounds = YES;
+        _thumb.layer.cornerRadius = 8;
+        _thumb.backgroundColor = [UIColor secondarySystemFillColor];
+        [self.contentView addSubview:_thumb];
+        _titleLabel = [UILabel new];
+        _titleLabel.numberOfLines = 2;
+        _titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+        _titleLabel.textColor = [UIColor labelColor];
+        [self.contentView addSubview:_titleLabel];
+        _channelLabel = [UILabel new];
+        _channelLabel.font = [UIFont systemFontOfSize:13];
+        _channelLabel.textColor = [UIColor secondaryLabelColor];
+        [self.contentView addSubview:_channelLabel];
+    }
+    return self;
+}
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGFloat pad = 16, vpad = 8, thumbW = 128, thumbH = 72, gap = 12;
+    _thumb.frame = CGRectMake(pad, vpad, thumbW, thumbH);
+    CGFloat tx = pad + thumbW + gap;
+    CGFloat tw = self.contentView.bounds.size.width - tx - pad;
+    CGSize titleSize = [_titleLabel sizeThatFits:CGSizeMake(tw, thumbH)];
+    CGFloat titleH = MIN(titleSize.height, 40);
+    CGFloat chH = _channelLabel.text.length ? 16 : 0;
+    CGFloat blockH = titleH + (chH ? chH + 2 : 0);
+    CGFloat ty = MAX(vpad, vpad + (thumbH - blockH) / 2.0);
+    _titleLabel.frame = CGRectMake(tx, ty, tw, titleH);
+    _channelLabel.frame = CGRectMake(tx, CGRectGetMaxY(_titleLabel.frame) + 2, tw, chH);
+}
+- (void)prepareForReuse {
+    [super prepareForReuse];
+    _thumb.image = nil; _titleLabel.text = nil; _channelLabel.text = nil;
+}
+@end
+
 // Queue viewer -- our stand-in for the native "Up next" panel (which we can't populate;
 // it's server-built, see the RE notes). Presented as a bottom sheet so it feels like YT's
 // own panels. Tap a row to play it (dropping the ones before it), long-press-drag to
 // reorder (instant + local -- no server round-trip, unlike a real playlist), swipe to
-// remove, Clear to empty. Titles via YT's public oEmbed; thumbnails from i.ytimg.com.
+// remove, Clear to empty. Titles + channel via YT's public oEmbed; thumbnails from i.ytimg.com.
 @interface YTLQueueViewController : UIViewController <UITableViewDataSource, UITableViewDelegate, UITableViewDragDelegate, UITableViewDropDelegate>
 @end
 
@@ -669,6 +720,7 @@ static NSString *ytlVideoIDFromThumbnailURL(NSURL *url) {
     UITableView *_table;
     NSMutableArray<NSString *> *_items;
     NSMutableDictionary<NSString *, NSString *> *_titles;   // videoID → title
+    NSMutableDictionary<NSString *, NSString *> *_channels; // videoID → channel (oEmbed author)
     NSMutableDictionary<NSString *, UIImage *> *_thumbs;    // videoID → thumbnail
 }
 
@@ -676,6 +728,7 @@ static NSString *ytlVideoIDFromThumbnailURL(NSURL *url) {
     [super viewDidLoad];
     _items = [[[YTLQueueManager shared] allVideoIDs] mutableCopy];
     _titles = [NSMutableDictionary dictionary];
+    _channels = [NSMutableDictionary dictionary];
     _thumbs = [NSMutableDictionary dictionary];
     self.view.backgroundColor = [UIColor systemBackgroundColor];
     [self updateTitle];
@@ -687,7 +740,9 @@ static NSString *ytlVideoIDFromThumbnailURL(NSURL *url) {
     _table.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     _table.dataSource = self;
     _table.delegate = self;
-    _table.rowHeight = 76;
+    _table.rowHeight = 88;
+    _table.separatorStyle = UITableViewCellSeparatorStyleNone;   // YT list panels have no separators
+    [_table registerClass:[YTLQueueCell class] forCellReuseIdentifier:@"q"];
     // Long-press-drag reorder, native style. Keeps tap-to-play and swipe-remove working
     // (unlike edit-mode), which is how YT's own list panels behave.
     _table.dragInteractionEnabled = YES;
@@ -715,11 +770,14 @@ static NSString *ytlVideoIDFromThumbnailURL(NSURL *url) {
     NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
         if (!data) return;
         NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-        NSString *title = [json isKindOfClass:[NSDictionary class]] ? json[@"title"] : nil;
+        if (![json isKindOfClass:[NSDictionary class]]) return;
+        NSString *title = json[@"title"];
+        NSString *channel = json[@"author_name"];
         if (![title isKindOfClass:[NSString class]] || !title.length) return;
         dispatch_async(dispatch_get_main_queue(), ^{
             __strong typeof(ws) ss = ws; if (!ss) return;
             ss->_titles[videoID] = title;
+            if ([channel isKindOfClass:[NSString class]] && channel.length) ss->_channels[videoID] = channel;
             [ss->_table reloadData];
         });
     }];
@@ -728,20 +786,18 @@ static NSString *ytlVideoIDFromThumbnailURL(NSURL *url) {
 
 - (void)loadThumbFor:(NSString *)videoID atIndexPath:(NSIndexPath *)ip {
     __weak typeof(self) ws = self;
-    NSURL *thumb = [NSURL URLWithString:[NSString stringWithFormat:@"https://i.ytimg.com/vi/%@/hqdefault.jpg", videoID]];
+    // mqdefault is a clean 16:9 crop (320x180) -- hqdefault is 4:3 with black bars. aspectFill
+    // into the rounded 16:9 thumb needs no manual downscale.
+    NSURL *thumb = [NSURL URLWithString:[NSString stringWithFormat:@"https://i.ytimg.com/vi/%@/mqdefault.jpg", videoID]];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         NSData *d = thumb ? [NSData dataWithContentsOfURL:thumb] : nil;
-        UIImage *raw = d ? [UIImage imageWithData:d] : nil;
-        if (!raw) return;
-        // Downscale to a cell-sized thumbnail (the default cell imageView won't shrink a huge one).
-        CGSize target = CGSizeMake(120, 68);
-        UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:target];
-        UIImage *small = [r imageWithActions:^(UIGraphicsImageRendererContext *ctx) { [raw drawInRect:CGRectMake(0, 0, target.width, target.height)]; }];
+        UIImage *img = d ? [UIImage imageWithData:d] : nil;
+        if (!img) return;
         dispatch_async(dispatch_get_main_queue(), ^{
             __strong typeof(ws) ss = ws; if (!ss) return;
-            ss->_thumbs[videoID] = small;
-            UITableViewCell *c = [ss->_table cellForRowAtIndexPath:ip];
-            if (c) { c.imageView.image = small; [c setNeedsLayout]; }
+            ss->_thumbs[videoID] = img;
+            YTLQueueCell *c = (YTLQueueCell *)[ss->_table cellForRowAtIndexPath:ip];
+            if ([c isKindOfClass:[YTLQueueCell class]]) c.thumb.image = img;
         });
     });
 }
@@ -749,15 +805,14 @@ static NSString *ytlVideoIDFromThumbnailURL(NSURL *url) {
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s { return _items.count; }
 
 - (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
-    UITableViewCell *cell = [tv dequeueReusableCellWithIdentifier:@"q"];
-    if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"q"];
+    YTLQueueCell *cell = [tv dequeueReusableCellWithIdentifier:@"q" forIndexPath:ip];
     NSString *vid = _items[ip.row];
-    cell.textLabel.numberOfLines = 2;
-    cell.textLabel.text = _titles[vid] ?: vid;
-    cell.detailTextLabel.text = LOC(@"TapToPlay");
+    cell.titleLabel.text = _titles[vid] ?: vid;
+    cell.channelLabel.text = _channels[vid] ?: @"";
     UIImage *cached = _thumbs[vid];
-    cell.imageView.image = cached;
+    cell.thumb.image = cached;
     if (!cached) [self loadThumbFor:vid atIndexPath:ip];
+    [cell setNeedsLayout];
     return cell;
 }
 
