@@ -14,6 +14,10 @@
 #define ytlSetBool(value, key) [[YTLUserDefaults standardUserDefaults] setBool:(value) forKey:(key)]
 #define ytlSetInt(value, key) [[YTLUserDefaults standardUserDefaults] setInteger:(value) forKey:(key)]
 
+// PiP diagnostic log filename (in the app's Documents dir). Shared so YTLite.x (writer) and
+// Settings.x (export/clear) resolve the same path. Gated on the `pipDiagLog` toggle.
+#define YTL_PIP_LOG_NAME @"YTLitePiPLog.txt"
+
 @interface YTTouchFeedbackController : YTCollectionViewCell
 @property (nonatomic, strong, readwrite) UIColor *feedbackColor;
 @end

@@ -574,6 +574,29 @@ static NSString *GetCacheSize() {
                     return YES;
                 }],
 
+                // PiP diagnostic log: capture the intermittent Picture-in-Picture re-entry bug
+                // untethered. Toggle records PiP + app lifecycle events to a file; Export opens the
+                // share sheet with it (save to Files / AirDrop / copy → paste in chat); Clear wipes it.
+                [self switchWithTitle:@"PipDiagLog" key:@"pipDiagLog"],
+                [%c(YTSettingsSectionItem) itemWithTitle:LOC(@"ExportPipLog") titleDescription:nil accessibilityIdentifier:@"YTLiteSectionItem" detailTextBlock:nil selectBlock:^BOOL (YTSettingsCell *cell, NSUInteger arg1) {
+                    NSString *path = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject stringByAppendingPathComponent:YTL_PIP_LOG_NAME];
+                    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+                        [[%c(YTToastResponderEvent) eventWithMessage:LOC(@"PipLogEmpty") firstResponder:[self parentResponder]] send];
+                        return NO;
+                    }
+                    UIActivityViewController *share = [[UIActivityViewController alloc] initWithActivityItems:@[[NSURL fileURLWithPath:path]] applicationActivities:nil];
+                    share.popoverPresentationController.sourceView = cell;      // iPad anchor
+                    share.popoverPresentationController.sourceRect = cell.bounds;
+                    [[%c(YTUIUtils) topViewControllerForPresenting] presentViewController:share animated:YES completion:nil];
+                    return NO;
+                }],
+                [%c(YTSettingsSectionItem) itemWithTitle:LOC(@"ClearPipLog") titleDescription:nil accessibilityIdentifier:@"YTLiteSectionItem" detailTextBlock:nil selectBlock:^BOOL (YTSettingsCell *cell, NSUInteger arg1) {
+                    NSString *path = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject stringByAppendingPathComponent:YTL_PIP_LOG_NAME];
+                    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+                    [[%c(YTToastResponderEvent) eventWithMessage:LOC(@"Done") firstResponder:[self parentResponder]] send];
+                    return YES;
+                }],
+
                 [%c(YTSettingsSectionItem) itemWithTitle:LOC(@"ResetSettings") titleDescription:nil accessibilityIdentifier:@"YTLiteSectionItem" detailTextBlock:nil selectBlock:^BOOL (YTSettingsCell *cell, NSUInteger arg1) {
                     YTAlertView *alertView = [%c(YTAlertView) confirmationDialogWithAction:^{
                         [YTLUserDefaults resetUserDefaults];
