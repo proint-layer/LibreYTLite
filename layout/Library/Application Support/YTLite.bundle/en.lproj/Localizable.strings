@@ -61,6 +61,11 @@
 "EnableQueueDesc" = "Adds a watch queue: use the ⋯ menu on any video to add it, and queued videos play in order automatically when the current one ends. A free reimplementation of the Premium-only queue.";
 "QueuePaddles" = "Queue buttons on player";
 "QueuePaddlesDesc" = "When the queue has items, the player's next/previous paddles drive it on non-playlist videos: next plays the next queued video, previous opens the queue. Turn off to always keep YouTube's native next/previous.";
+"PipDiagLog" = "PiP diagnostic log";
+"PipDiagLogDesc" = "Records Picture-in-Picture and app background/foreground events to a file, to catch the intermittent PiP re-entry bug without a computer. Use Export below to share the log; Clear to wipe it. Leave off unless investigating.";
+"ExportPipLog" = "Export PiP log";
+"ClearPipLog" = "Clear PiP log";
+"PipLogEmpty" = "PiP log is empty";
 "AddToQueue" = "Add to queue";
 "AddedToQueue" = "Added to queue";
 "RemoveFromQueue" = "Remove from queue";

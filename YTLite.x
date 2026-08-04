@@ -120,6 +120,44 @@ static void ytlScanAndCacheImages(NSData *data) {
 - (BOOL)playableInBackground { return ytlBool(@"backgroundPlayback") ? YES : NO; }
 %end
 
+// PiP re-entry bug diagnostic. YouTube's PiP (MLPIPController, MediaLibrary layer) is inconsistent
+// on non-Premium: works the first time, then a home-gesture re-entry fails until the video reloads.
+// Since it's intermittent and won't repro on demand, we route every PiP event -- plus app
+// background/foreground (see %ctor) -- to a persistent, exportable file (Player > PiP diagnostic
+// log; export/clear in Advanced) so it can be captured UNTETHERED. The failure signature is an
+// "APP -> background" with no following "didStart" (and/or possible stuck 0). ytlPipEvent is
+// defined after the queue statics below (so it can stamp the current video ID); it also os_logs.
+static void ytlPipEvent(NSString *event);
+@interface MLPIPController : NSObject
+- (BOOL)pictureInPicturePossible;
+- (BOOL)pictureInPictureActive;
+@end
+static __weak MLPIPController *gYTLPipController;   // last live PiP controller (for the %ctor bg check)
+static BOOL gYTLPipEverStarted;                     // did PiP start at least once this session?
+%hook MLPIPController
+- (void)startPictureInPictureWithPaused:(BOOL)paused {
+    gYTLPipController = self;
+    ytlPipEvent([NSString stringWithFormat:@"start(inApp) paused=%d possible=%d active=%d", paused, [self pictureInPicturePossible], [self pictureInPictureActive]]);
+    %orig;
+}
+- (void)stopPictureInPicture               { gYTLPipController = self; ytlPipEvent([NSString stringWithFormat:@"stop (active=%d)", [self pictureInPictureActive]]); %orig; }
+- (void)activatePiPController              { gYTLPipController = self; ytlPipEvent([NSString stringWithFormat:@"activate (possible=%d)", [self pictureInPicturePossible]]); %orig; }
+- (void)deactivatePiPController            { gYTLPipController = self; ytlPipEvent(@"deactivate"); %orig; }
+- (void)renderingViewWillRecreateDisplayLayer { ytlPipEvent(@"recreateDisplayLayer"); %orig; }
+- (void)pictureInPictureControllerWillStartPictureInPicture:(id)c { ytlPipEvent([NSString stringWithFormat:@"willStart possible=%d", [self pictureInPicturePossible]]); %orig; }
+- (void)pictureInPictureControllerDidStartPictureInPicture:(id)c { gYTLPipEverStarted = YES; ytlPipEvent(@"didStart"); %orig; }
+// possible= AFTER a stop is the key tell: if it gets stuck 0 here (and stays 0 until a reload),
+// that's the "re-entry dead until you load a new video" bug.
+- (void)pictureInPictureControllerDidStopPictureInPicture:(id)c  { ytlPipEvent([NSString stringWithFormat:@"didStop (possible=%d)", [self pictureInPicturePossible]]); %orig; }
+- (void)pictureInPictureController:(id)c failedToStartPictureInPictureWithError:(id)error { ytlPipEvent([NSString stringWithFormat:@"FAILED %@", error]); %orig; }
+- (void)pictureInPictureControllerWillStopPictureInPicture:(id)c { ytlPipEvent(@"willStop"); %orig; }
+// The "tap the PiP window to return to the app" path (distinct from an auto-stop) -- the exact
+// flow in the bug report. If `possible` drops here and doesn't recover, that's the culprit.
+- (void)pictureInPictureController:(id)c restoreUserInterfaceForPictureInPictureStopWithCompletionHandler:(id)handler {
+    ytlPipEvent([NSString stringWithFormat:@"restoreUI (possible=%d)", [self pictureInPicturePossible]]); %orig;
+}
+%end
+
 // Kill ads. Video ads live on the player response, and they ride THREE
 // separate arrays -- not one. We used to empty only playerAdsArray and the
 // odd 6s bumper still snuck through as an "ad placement" or "ad slot" instead.
@@ -608,6 +646,44 @@ static NSString *gYTLLastActiveVID;   // de-dupes repeat activate callbacks for 
 static BOOL ytlVideoIsActive(void) {
     YTPlayerViewController *p = gYTLPlayer;
     return p != nil && p.contentVideoID.length > 0;
+}
+
+// Persistent PiP event log (the MLPIPController hooks + %ctor lifecycle observers route here).
+// Appends verbose, timestamped, video-ID-stamped lines to Documents/YTL_PIP_LOG_NAME when the
+// `pipDiagLog` toggle is on (always os_logs regardless). Serial-queued, tail-capped at ~256KB.
+// Exported/cleared from Advanced settings so the intermittent PiP re-entry bug can be captured
+// without a computer: paste the file and the sequence tells the story.
+static NSString *ytlPipLogPath(void) {
+    return [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject
+            stringByAppendingPathComponent:YTL_PIP_LOG_NAME];
+}
+static void ytlPipEvent(NSString *event) {
+    if (!ytlBool(@"pipDiagLog")) return;   // gated: nothing written/logged unless the user opts in
+    NSString *vid = gYTLLastActiveVID ?: @"-";
+    NSDate *now = [NSDate date];
+    static dispatch_queue_t q; static NSDateFormatter *df; static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        q = dispatch_queue_create("com.dvntm.ytlite.piplog", DISPATCH_QUEUE_SERIAL);
+        df = [NSDateFormatter new];
+        df.dateFormat = @"MM-dd HH:mm:ss.SSS";
+    });
+    dispatch_async(q, ^{
+        NSString *line = [NSString stringWithFormat:@"%@  %@  [vid=%@]\n", [df stringFromDate:now], event, vid];
+        NSString *path = ytlPipLogPath();
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+        if (!fh) { [line writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil]; return; }
+        @try { [fh seekToEndOfFile]; [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]]; }
+        @catch (__unused id e) {}
+        [fh closeFile];
+        // Tail-cap so a full day of use can't grow it unbounded.
+        NSNumber *size = [fm attributesOfItemAtPath:path error:nil][NSFileSize];
+        if (size.unsignedLongLongValue > 256 * 1024) {
+            NSData *d = [NSData dataWithContentsOfFile:path];
+            if (d.length > 128 * 1024)
+                [[d subdataWithRange:NSMakeRange(d.length - 128 * 1024, 128 * 1024)] writeToFile:path atomically:YES];
+        }
+    });
 }
 
 // Play a video by ID. This used to just open vnd.youtube://ID -- clean, but it DIED in
@@ -3139,6 +3215,16 @@ static NSURL *newCoverURL(NSURL *originalURL) {
 
 %ctor {
     YTLDBG(@"YTLite loaded (debug build)");
+
+    // PiP diagnostic: mark app background/foreground in the PiP log so the failure signature --
+    // "APP -> background" with no following "didStart" -- is visible in the exported file.
+    // ytlPipEvent no-ops the file write unless `pipDiagLog` is on.
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
+        ytlPipEvent(@"════ APP → background ════");
+    }];
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationWillEnterForegroundNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
+        ytlPipEvent(@"════ APP → foreground ════");
+    }];
 
     if (ytlBool(@"shortsOnlyMode") && (ytlBool(@"removeShorts") || ytlBool(@"reExplore"))) {
         ytlSetBool(NO, @"removeShorts");
