@@ -882,6 +882,52 @@ static void ytlPresentQueueViewer(void) {
 // on YTMainAppControlsOverlayView (addSubview + a layoutSubviews hook), and a second manager on
 // that view displaces its button. The queue is reachable via the long-press "View queue" action
 // instead. If a watch-page button is revisited, it must not touch YTMainAppControlsOverlayView.
+//
+// ...which is exactly why the queue overlay below HIJACKS the native prev/next paddles rather than
+// ADDING a button: hooking existing controls adds no subview, so iSB's own skip-button management on
+// this view is untouched. [SPIKE -- instrumented, gated on enableQueue; verify on-device that it
+// shows, advances the queue, and doesn't disturb iSB before this is made permanent.]
+// playlistControlsHidden distinguishes a SINGLETON video (YES) from a real playlist (NO),
+// independent of autonav/history (which make hasNext/hasPreviousVideo YES even on singletons --
+// so those can't tell the two apart). We only take over the paddles on a singleton.
+@protocol YTLPlayerNav
+- (BOOL)playlistControlsHidden;
+@end
+// True when we should drive the paddles: queue enabled + non-empty + a singleton video (not a
+// real playlist). Everything below hangs off this -- no subview added, so iSB is untouched.
+static BOOL ytlQueuePaddlesActive(YTMainAppControlsOverlayView *overlay) {
+    return ytlBool(@"enableQueue") && ytlBool(@"queuePaddles") && [YTLQueueManager shared].count > 0
+        && [(id<YTLPlayerNav>)overlay.playerViewController playlistControlsHidden];
+}
+%hook YTMainAppControlsOverlayView
+// Reveal + enable the native paddles (singletons hide them by default) so our queue is reachable.
+- (void)setNextButtonHidden:(BOOL)hidden      { %orig(ytlQueuePaddlesActive(self) ? NO  : hidden);  }
+- (void)setNextButtonEnabled:(BOOL)enabled    { %orig(ytlQueuePaddlesActive(self) ? YES : enabled); }
+- (void)setPreviousButtonHidden:(BOOL)hidden  { %orig(ytlQueuePaddlesActive(self) ? NO  : hidden);  }
+- (void)setPreviousButtonEnabled:(BOOL)enabled{ %orig(ytlQueuePaddlesActive(self) ? YES : enabled); }
+// Next paddle -> play the next queued video; Previous paddle -> open the queue viewer. In a real
+// playlist ytlQueuePaddlesActive is NO, so both fall through to YouTube's native navigation.
+- (void)didPressNext:(id)next {
+    if (ytlQueuePaddlesActive(self)) {
+        NSString *vid = [[YTLQueueManager shared] dequeue];
+        YTLDBG(@"overlay-next: play queued %@ (remaining=%lu)", vid, (unsigned long)[YTLQueueManager shared].count);
+        if (vid.length) { gYTLQueueEngaged = YES; ytlPlayVideoID(vid, self.playerViewController); return; }
+    }
+    YTLDBG(@"overlay-next: defer to native (singleton=%d count=%lu)",
+           [(id<YTLPlayerNav>)self.playerViewController playlistControlsHidden], (unsigned long)[YTLQueueManager shared].count);
+    %orig;
+}
+- (void)didPressPrevious:(id)previous {
+    if (ytlQueuePaddlesActive(self)) {
+        YTLDBG(@"overlay-prev: open queue viewer");
+        ytlPresentQueueViewer();
+        return;
+    }
+    YTLDBG(@"overlay-prev: defer to native (singleton=%d)",
+           [(id<YTLPlayerNav>)self.playerViewController playlistControlsHidden]);
+    %orig;
+}
+%end
 
 // Remove Dark Background in Overlay
 %hook YTMainAppVideoPlayerOverlayView

@@ -225,6 +225,7 @@ static NSString *GetCacheSize() {
             NSArray <YTSettingsSectionItem *> *rows = @[
                 [self switchWithTitle:@"Miniplayer" key:@"miniplayer"],
                 [self switchWithTitle:@"EnableQueue" key:@"enableQueue"],
+                [self switchWithTitle:@"QueuePaddles" key:@"queuePaddles"],
                 [self switchWithTitle:@"PortraitFullscreen" key:@"portraitFullscreen"],
                 [self switchWithTitle:@"CopyWithTimestamp" key:@"copyWithTimestamp"],
                 [self switchWithTitle:@"DisableAutoplay" key:@"disableAutoplay"],

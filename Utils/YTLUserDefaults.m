@@ -30,7 +30,8 @@ static NSString *const kDefaultsSuiteName = @"com.dvntm.ytlite";
         @"wiFiQualityIndex": @0,
         @"cellQualityIndex": @0,
         @"pivotIndex": @0,
-        @"enableQueue": @YES
+        @"enableQueue": @YES,
+        @"queuePaddles": @YES
     }];
 }
 
