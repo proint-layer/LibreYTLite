@@ -36,6 +36,9 @@
 @interface YTMenuController : NSObject @end
 @interface ELMTouchCommandPropertiesHandler : NSObject @end
 @interface YTELMDispatcher : NSObject @end
+@interface YTEngagementPanelContainerViewController : NSObject @end
+@interface YTEngagementPanelViewControllerManager : NSObject @end
+@interface YTEngagementPanelBaseScreenViewControllerImpl : NSObject @end
 
 static void elmtLog(NSString *s) { os_log(OS_LOG_DEFAULT, "[YTLELM] %{public}@", s); }
 #define ELMT(...) elmtLog([NSString stringWithFormat:__VA_ARGS__])
@@ -95,6 +98,34 @@ static NSString *elmtStr(id o) {
 %hook YTELMDispatcher
 - (void)dispatchCommand:(id)command fromSender:(id)sender completion:(id)completion {
     ELMT(@"DISPATCH  cmd=%@  sender=%@", elmtStr(command), [sender class]); %orig;
+}
+%end
+
+// -- ENGAGEMENT PANEL OPEN (spike for a native queue panel) ------------------
+// We want to open a native slide-up panel that hosts OUR OWN content VC (the queue), under
+// the player. The hosting API exists (-[…BaseScreenViewControllerImpl setContentViewController:]);
+// the unknown is the OPEN wiring — the show-command, the nav controller, and how to reach the
+// live container/manager for the current watch. These passthroughs capture all of that when you
+// open YouTube's own Comments/Description panel, so we can replicate it. `command` is a real id
+// (introspectable); the `%p` pointers let us see whether the container/manager are stable,
+// reachable instances. All log-and-%orig — nothing is changed.
+%hook YTEngagementPanelContainerViewController
+- (void)openEngagementPanelNavigationController:(id)controller animated:(BOOL)animated shouldRetainVideoHeight:(BOOL)height showCommand:(id)command isDraggingToOpen:(BOOL)open {
+    ELMT(@"PANEL.open  container=%p nav=%@ retainHeight=%d parent=%@ cmd=%@",
+         self, [controller class], height, [[self valueForKey:@"parentViewController"] class], elmtStr(command));
+    %orig;
+}
+%end
+
+%hook YTEngagementPanelViewControllerManager
+- (void)pushPanelWithShowCommand:(id)command toNavigationController:(id)controller animated:(BOOL)animated {
+    ELMT(@"PANEL.push  mgr=%p nav=%@ cmd=%@", self, [controller class], elmtStr(command)); %orig;
+}
+%end
+
+%hook YTEngagementPanelBaseScreenViewControllerImpl
+- (void)setContentViewController:(id)controller {
+    ELMT(@"PANEL.setContent  screen=%p content=%@", self, [controller class]); %orig;
 }
 %end
 

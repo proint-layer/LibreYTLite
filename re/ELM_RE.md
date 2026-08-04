@@ -262,3 +262,35 @@ All confirmed present via the dump; types via `ipsw class-dump`.
   `ipsw class-dump <MachO> --class '^Name$'` (typed signatures).
 - **Pipeline discipline:** AGENTS.md §8 (RE the selector *and its types* → instrument → confirm
   it fires → only then build).
+
+---
+
+## 9. Engagement panels — attempted, NO-GO for custom-VC content (don't re-try this way)
+
+Goal was a native slide-up panel under the player hosting our own queue VC (instead of a modal
+sheet). We got tantalizingly close, then hit an architectural wall. Recording it so nobody
+re-derives it.
+
+What works:
+- **Reach the container:** `-[YTWatchViewController engagementPanelContainerController]` returns the
+  live `YTEngagementPanelContainerViewController` for the current watch page (found by scanning the
+  key window's VC tree for `YTWatchViewController`).
+- **Host a custom VC:** `-[YTEngagementPanelBaseScreenViewControllerImpl initWithParentResponder:delegate:]`
+  + `-setContentViewController:` genuinely hosts our VC (traced `contentSuper=UIView`).
+
+What DOESN'T work — the wall:
+- Calling `-[container openEngagementPanelNavigationController:animated:shouldRetainVideoHeight:showCommand:isDraggingToOpen:]`
+  with a hand-built `YTEngagementPanelNavigationController` + `showCommand:nil` **silently no-ops**:
+  traced `shown=0, navSuper=(null), navFrame={0,0,0,0}, activeNavigationControllers=0`. The container
+  refuses a nav it didn't create.
+- The system is **command + renderer + identifier driven**. Panels are *defined by renderers*
+  (`-[manager addEngagementPanelRenderers:]`) keyed by a `YTIEngagementPanelIdentifier`, and opened by
+  a **show-command** (`+[container showCommandForEngagementPanelIdentifier:]` →
+  `-[container handleShowEngagementPanelCommand:]`); the manager builds the nav itself
+  (`-createNavigationControllerWithRootShowCommand:`) from the renderer. Content is **ELM elements**,
+  not a UIViewController — the same element-content wall as native cells/playlist panels.
+- Verdict: a custom-UIView panel can't cleanly enter this pipeline; even if you forced registration
+  into the private dicts, the drag/collapse/state machine is keyed by identifier and would misbehave.
+  **Shipped the modal sheet (with native-style cells) instead.** Revisit only if we ever solve
+  building ELM element renderers by hand (§2) — which remains the root blocker across all three of
+  these "native surface" attempts (cells, playlist panel, engagement panel).
