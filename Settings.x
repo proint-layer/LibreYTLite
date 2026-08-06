@@ -574,6 +574,11 @@ static NSString *GetCacheSize() {
                     return YES;
                 }],
 
+                // Fix for the intermittent PiP re-entry failure (YouTube leaves the PiP controller on
+                // a stale layer after foregrounding, so the next home swipe silently fails until the
+                // layer readies). Re-arms YouTube's own controller once it's ready.
+                [self switchWithTitle:@"PipReentryFix" key:@"pipReentryFix"],
+
                 // PiP diagnostic log: capture the intermittent Picture-in-Picture re-entry bug
                 // untethered. Toggle records PiP + app lifecycle events to a file; Export opens the
                 // share sheet with it (save to Files / AirDrop / copy → paste in chat); Clear wipes it.

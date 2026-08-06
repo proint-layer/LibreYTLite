@@ -131,9 +131,44 @@ static void ytlPipEvent(NSString *event);
 @interface MLPIPController : NSObject
 - (BOOL)pictureInPicturePossible;
 - (BOOL)pictureInPictureActive;
+- (void)activatePiPController;
 @end
-static __weak MLPIPController *gYTLPipController;   // last live PiP controller (for the %ctor bg check)
+static __weak MLPIPController *gYTLPipController;   // last live PiP controller (for the re-arm + bg check)
 static BOOL gYTLPipEverStarted;                     // did PiP start at least once this session?
+
+// FIX for the intermittent PiP re-entry failure. After a foreground display-layer recreation
+// YouTube leaves its PiP controller on a not-yet-ready layer, so pictureInPicturePossible sticks at
+// 0 and the next home swipe's auto-PiP silently fails -- until the layer becomes readyForDisplay a
+// beat later (why "fail, return, retry" works). This gives it that beat and re-arms YouTube's OWN
+// controller if still stuck. Called both after recreateDisplayLayer AND on every app foreground (the
+// user's manual "return and retry", automated -- covers the slower bg-playback-on recovery too).
+// Low-risk: no AVPiPController re-creation, just bounded, guarded re-calls of activatePiPController,
+// each a no-op the instant PiP is possible/active. If the log shows possible stays 0 through all
+// tries (layer never readies -> the bg-on "dead until reload" case), re-arm is insufficient and the
+// next step is re-attaching the player (MLAVPIPPlayerLayerView setPlayer:/setVideo:playerConfig:).
+static void ytlPipRearm(MLPIPController *pip) {
+    if (!ytlBool(@"pipReentryFix") || !pip) return;
+    // Coalesce: recreateDisplayLayer and the app-foreground fire ~together, and rapid swipe cycles
+    // can stack schedules. One batch of retries per ~1.5s is plenty (each is a no-op once possible).
+    static NSTimeInterval lastSchedule = 0;
+    NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+    if (now - lastSchedule < 1.5) return;
+    lastSchedule = now;
+    __weak MLPIPController *weak = pip;
+    for (int attempt = 1; attempt <= 4; attempt++) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * attempt * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            MLPIPController *s = weak;
+            if (!s) return;
+            @try {
+                if ([s pictureInPictureActive] || [s pictureInPicturePossible]) return;   // already fine
+                ytlPipEvent([NSString stringWithFormat:@"reentry-fix: re-arm #%d (possible=0)", attempt]);
+                [s activatePiPController];
+                ytlPipEvent([NSString stringWithFormat:@"reentry-fix: after re-arm #%d possible=%d", attempt, [s pictureInPicturePossible]]);
+            } @catch (__unused id e) {}
+        });
+    }
+}
+
 %hook MLPIPController
 - (void)startPictureInPictureWithPaused:(BOOL)paused {
     gYTLPipController = self;
@@ -143,7 +178,7 @@ static BOOL gYTLPipEverStarted;                     // did PiP start at least on
 - (void)stopPictureInPicture               { gYTLPipController = self; ytlPipEvent([NSString stringWithFormat:@"stop (active=%d)", [self pictureInPictureActive]]); %orig; }
 - (void)activatePiPController              { gYTLPipController = self; ytlPipEvent([NSString stringWithFormat:@"activate (possible=%d)", [self pictureInPicturePossible]]); %orig; }
 - (void)deactivatePiPController            { gYTLPipController = self; ytlPipEvent(@"deactivate"); %orig; }
-- (void)renderingViewWillRecreateDisplayLayer { ytlPipEvent(@"recreateDisplayLayer"); %orig; }
+- (void)renderingViewWillRecreateDisplayLayer { ytlPipEvent(@"recreateDisplayLayer"); %orig; ytlPipRearm(self); }
 - (void)pictureInPictureControllerWillStartPictureInPicture:(id)c { ytlPipEvent([NSString stringWithFormat:@"willStart possible=%d", [self pictureInPicturePossible]]); %orig; }
 - (void)pictureInPictureControllerDidStartPictureInPicture:(id)c { gYTLPipEverStarted = YES; ytlPipEvent(@"didStart"); %orig; }
 // possible= AFTER a stop is the key tell: if it gets stuck 0 here (and stays 0 until a reload),
@@ -3220,10 +3255,17 @@ static NSURL *newCoverURL(NSURL *originalURL) {
     // "APP -> background" with no following "didStart" -- is visible in the exported file.
     // ytlPipEvent no-ops the file write unless `pipDiagLog` is on.
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
-        ytlPipEvent(@"════ APP → background ════");
+        // Snapshot PiP state at the moment of the home swipe. A "background (possible=1 active=0)"
+        // NOT followed by a `didStart` = PiP failed to auto-start despite being possible -- the
+        // residual failure (re-arming possible isn't enough). possible=0 here = the fix didn't
+        // re-arm in time (a race). This is the line that pins a real failure.
+        MLPIPController *pip = gYTLPipController;
+        ytlPipEvent([NSString stringWithFormat:@"════ APP → background ════ (possible=%d active=%d)",
+                     pip ? [pip pictureInPicturePossible] : -1, pip ? [pip pictureInPictureActive] : -1]);
     }];
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationWillEnterForegroundNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
         ytlPipEvent(@"════ APP → foreground ════");
+        ytlPipRearm(gYTLPipController);   // automate the "return to the app" recovery: re-arm if stuck
     }];
 
     if (ytlBool(@"shortsOnlyMode") && (ytlBool(@"removeShorts") || ytlBool(@"reExplore"))) {
