@@ -32,7 +32,8 @@ static NSString *const kDefaultsSuiteName = @"com.dvntm.ytlite";
         @"pivotIndex": @0,
         @"enableQueue": @YES,
         @"queuePaddles": @YES,
-        @"pipDiagLog": @NO
+        @"pipDiagLog": @NO,
+        @"pipReentryFix": @YES
     }];
 }
 
