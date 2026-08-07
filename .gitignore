@@ -7,3 +7,7 @@ diff.txt
 console
 HANDOFF.md
 YTClean/
+
+# Local editor / clangd config (machine-specific absolute paths — keep out of the repo)
+.vscode/
+compile_flags.txt

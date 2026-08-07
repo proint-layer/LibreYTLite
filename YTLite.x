@@ -515,6 +515,22 @@ static NSMutableArray *ytlFilteredSections(NSArray *array) {
 - (void)setTitle:(NSString *)title { ytlBool(@"noYTLogo") ? %orig(@"") : %orig; }
 %end
 
+#ifdef YTL_DEBUG_BUILD
+// Debug/logging builds: crop the home YouTube wordmark to its left half ("You") so a device running
+// a diagnostic build is obvious at a glance — fixes the "which build am I on?" confusion. Compile-
+// gated; a normal build contains none of this. Applied via YTHeaderLogoControllerImpl below.
+static UIImage *ytlDebugCropLogo(UIImage *img) {
+    CGImageRef cg = img.CGImage;
+    if (!cg) return img;
+    size_t w = CGImageGetWidth(cg), h = CGImageGetHeight(cg);
+    CGImageRef cropped = CGImageCreateWithImageInRect(cg, CGRectMake(0, 0, (size_t)(w * 0.5), h));  // left ½ ≈ "You"
+    if (!cropped) return img;
+    UIImage *out = [UIImage imageWithCGImage:cropped scale:img.scale orientation:img.imageOrientation];
+    CGImageRelease(cropped);
+    return out;
+}
+#endif
+
 // Premium logo
 %hook UIImageView
 - (void)setImage:(UIImage *)image {
@@ -532,6 +548,34 @@ static NSMutableArray *ytlFilteredSections(NSArray *array) {
     }
 
     %orig(image);
+}
+%end
+
+// The home wordmark is built by YTHeaderLogoControllerImpl (present on 21.25.x AND 21.31.x), NOT by a
+// plain UIImageView -setImage: with a "Resources: youtube_logo)" name — that classic path is dead on
+// these versions (it's an asset-catalog image now), which is why the earlier -setImage: crop silently
+// no-op'd. Hook the controller's apply point instead: crop the default wordmark to its left half ("You")
+// and force needsRescaling:YES so the logo view refits to the narrower image rather than stretching
+// "You" back out to the full wordmark width. Yoodle (doodle) logos are left untouched.
+//
+// This hook is ALWAYS compiled (a named %group here would suppress Logos' auto-%init of the ~100
+// ungrouped hooks — see the note above the %ctor). The crop is gated on YTL_DEBUG_BUILD, so a shipped
+// build gets an inert %orig passthrough — exactly the pattern the ELM TRACE hooks use.
+@interface YTHeaderLogoControllerImpl : NSObject
+- (void)updateLogoWithImage:(UIImage *)image needsRescaling:(BOOL)rescaling withYoodle:(BOOL)yoodle;
+@end
+
+%hook YTHeaderLogoControllerImpl
+- (void)updateLogoWithImage:(UIImage *)image needsRescaling:(BOOL)rescaling withYoodle:(BOOL)yoodle {
+#ifdef YTL_DEBUG_BUILD
+    if (image && !yoodle) {
+        UIImage *cropped = ytlDebugCropLogo(image);
+        YTLDBG(@"debug-logo: crop %.0fx%.0f -> %.0fx%.0f (rescale %d->1)",
+               image.size.width, image.size.height, cropped.size.width, cropped.size.height, rescaling);
+        return %orig(cropped, YES, NO);
+    }
+#endif
+    %orig(image, rescaling, yoodle);
 }
 %end
 
@@ -1827,13 +1871,22 @@ static id ytlInjectQueueActions(id actions, UIView *fromView, id responder) {
     return out;
 }
 
+// Community-post image actions injected into the SAME native ⋯ menu. Defined in the community-post
+// section below (needs ytlDescIsPost + the post-image node walk); forward-declared here for the hook.
+// `entry` is the menu's element renderer — the view-independent fallback for surfaces (Posts detail,
+// Community tab) whose ⋯ anchor has no ELM node in its view ancestry.
+static id ytlInjectPostActions(id actions, UIView *fromView, id entry);
+
 @interface YTMenuController : NSObject @end
 %hook YTMenuController
 // Only the shouldLogItems: variant — it is the one that fired on every traced surface (home ⋯,
 // home long-press, channel-Videos ⋯ + long-press). Hooking the sibling too would double-append
 // if one calls the other.
 - (id)actionsForRenderers:(id)renderers fromView:(UIView *)view entry:(id)entry shouldLogItems:(BOOL)items firstResponder:(id)responder {
-    return ytlInjectQueueActions(%orig, view, responder);
+    // Chain both injectors on the one menu choke point. A given menu is either a video's or a
+    // post's, so exactly one appends; the other no-ops (queue finds no video ID / post finds no
+    // backstage container). Post-menu delivery is a companion to the long-press, which stays.
+    return ytlInjectPostActions(ytlInjectQueueActions(%orig, view, responder), view, entry);
 }
 %end
 
@@ -2603,24 +2656,98 @@ static BOOL ytlDescIsPost(NSString *desc) {
            [desc containsString:@"sharedpost"];
 }
 
+// -- POST: inject image actions into the native ⋯ menu (companion to the long-press) ----------
+// ELM RE (2026-08-07 device trace) confirmed a community post's ⋯ (post_menu_button) funnels
+// through the same -[YTMenuController actionsForRenderers:…] we use for the queue, with a backstage
+// entry renderer. Stock YouTube gives post images NO interaction, so this is purely additive: the
+// custom long-press stays as primary/fallback, and we ALSO surface Open/Save/Copy in the ⋯ menu so
+// the feature survives the gesture layer breaking. Image extraction is unchanged (fcrop64 node walk
+// + feed-time cache); only the delivery path is added.
+
+// Climb from the menu anchor (the ⋯ button view) to the enclosing post CONTENT container node.
+// ytlDescIsPost matches "…post>"/"…original_post>" (not "…post_menu_button>"), so it skips the
+// button itself and lands on the container; keepalive_node is YouTube's own ASDK back-ref.
+static id ytlPostContainerForAnchorView(UIView *view) {
+    for (UIView *v = view; v; v = v.superview) {
+        if (ytlDescIsPost([v description]) && [v respondsToSelector:@selector(keepalive_node)]) {
+            id node = [(id)v keepalive_node];
+            if (node) return node;
+        }
+    }
+    return nil;
+}
+
+// First ATTACHED post image in the subtree. Post attachments carry "fcrop64" in the URL; author
+// avatars / badges don't — so this filters to the real image without a finger location (the ⋯
+// button isn't on an image). ytlPresentGallery then pages the full cached group from that URL.
+static NSURL *ytlPostImageURLInNode(ASDisplayNode *node, int depth) {
+    if (!node || depth > 12) return nil;
+    NSURL *own = nodeImageURL(node);
+    if (own && [own.absoluteString containsString:@"fcrop64"]) return own;
+    for (ASDisplayNode *child in node.yogaChildren) { NSURL *u = ytlPostImageURLInNode(child, depth + 1); if (u) return u; }
+    if ([node respondsToSelector:@selector(subnodes)]) {
+        for (ASDisplayNode *child in [node valueForKey:@"subnodes"]) { NSURL *u = ytlPostImageURLInNode(child, depth + 1); if (u) return u; }
+    }
+    return nil;
+}
+
+// Resolve a post's first attached image WITHOUT a view tree. On the Posts detail page and the
+// Community tab the ⋯ anchor is a bare YTQTMButton whose ancestors carry no keepalive_node (device
+// trace 2026-08-07: `menu-post-miss anchor=YTQTMButton`, zero ka-node lines) — so the feed's
+// view-climb finds nothing there. But the menu hook still hands us the post's `entry` renderer; its
+// EML bytes hold the same fcrop64 image URLs we scan at feed time. Reading elementData also re-enters
+// our elementData hook, which caches the multi-image group, so ytlPresentGallery still pages the set.
+// `elementData` lives on YTIElementRenderer but isn't in the imported header (the elementData hook
+// works only because Logos doesn't need a declaration). Declare the selector via a throwaway protocol
+// so we can send it to the id-typed entry after a respondsToSelector: guard, with no compile warning.
+@protocol YTLElementDataProviding <NSObject>
+- (NSData *)elementData;
+@end
+static NSURL *ytlPostImageURLFromEntry(id entry) {
+    if (!entry) return nil;
+    NSString *s = nil;
+    if ([entry respondsToSelector:@selector(elementData)]) {
+        NSData *data = [(id<YTLElementDataProviding>)entry elementData];
+        if ([data isKindOfClass:[NSData class]] && data.length && data.length < 600000)
+            s = [[NSString alloc] initWithData:data encoding:NSISOLatin1StringEncoding]; // lossless byte->char
+    }
+    if (!s) s = [entry description];
+    if (![s containsString:@"fcrop64"]) return nil;                   // fast reject: videos / text-only posts
+    NSMutableArray<NSURL *> *found = [NSMutableArray array];
+    ytlAddPhotoURLsFromString(s, found);
+    if (found.count >= 2) ytlRecordImageGroup(found);
+    return found.firstObject;
+}
+
+static id ytlInjectPostActions(id actions, UIView *fromView, id entry) {
+    if (!ytlBool(@"postManager") || ![actions isKindOfClass:[NSArray class]]) return actions;
+    id container = ytlPostContainerForAnchorView(fromView);
+    NSURL *URL = container ? ytlPostImageURLInNode((ASDisplayNode *)container, 0) : nil;
+#if defined(YTL_POST_DEBUG)
+    NSString *via = URL ? @"container" : @"entry";   // which source resolved it (for the trace below)
+#endif
+    if (!URL) URL = ytlPostImageURLFromEntry(entry);                  // Posts-detail / Community fallback
+    if (!URL) return actions;                                         // not a post menu, or text-only (Community miss is probed separately)
+    UIViewController *host = [%c(YTUIUtils) topViewControllerForPresenting];
+    NSMutableArray *out = [actions mutableCopy];
+    [out addObject:[%c(YTActionSheetAction) actionWithTitle:@"Open Image" iconImage:YTImageNamed(@"yt_outline_image_24pt") style:0 handler:^{ ytlPresentGallery(URL, host); }]];
+    [out addObject:[%c(YTActionSheetAction) actionWithTitle:LOC(@"SaveCurrentImage") iconImage:YTImageNamed(@"yt_outline_image_24pt") style:0 handler:^{ downloadImageFromURL(host, URL, YES); }]];
+    [out addObject:[%c(YTActionSheetAction) actionWithTitle:LOC(@"CopyCurrentImage") iconImage:YTImageNamed(@"yt_outline_library_image_24pt") style:0 handler:^{ downloadImageFromURL(host, URL, NO); }]];
+    YTLDBG(@"menu-post: appended Open/Save/Copy via=%@ url=%@", via, URL);
+    return out;
+}
+
 %hook _ASDisplayView
 - (void)setKeepalive_node:(id)arg1 {
     %orig;
 
     NSString *desc = [self description];
 
-#if defined(YTL_POST_DEBUG)
-    // Diagnostic: surface the real runtime identifier of post-like feed cells and whether
-    // ytlDescIsPost() still matches them (so we can tell a matcher miss from a URL miss).
-    if (ytlBool(@"postManager") &&
-        ([desc rangeOfString:@"backstage" options:NSCaseInsensitiveSearch].location != NSNotFound ||
-         [desc rangeOfString:@"post" options:NSCaseInsensitiveSearch].location != NSNotFound ||
-         [desc rangeOfString:@"shared" options:NSCaseInsensitiveSearch].location != NSNotFound)) {
-        NSString *trimmed = desc.length > 700 ? [desc substringToIndex:700] : desc;
-        YTLDBG(@"keepalive post-like (match=%d): %@", ytlDescIsPost(desc) ? 1 : 0, trimmed);
-    }
-
-#endif
+    // NOTE: the old per-cell "keepalive post-like (match=%d)" trace lived here. It fired ~6 lines
+    // per backstage cell on every setKeepalive_node: (i.e. constantly while scrolling), flooding
+    // the log and truncating it before the events we actually care about (menu-queue/menu-post).
+    // Its question — "does ytlDescIsPost() still match these cells?" — is long settled, so it's
+    // retired. The menu-path probes in ytlInjectPostActions are the signal now.
 
     NSArray *gesturesInfo = @[
         @{@"selector": @"savePFP:", @"text": @"ELMImageNode-View", @"key": @(ytlBool(@"saveProfilePhoto"))},

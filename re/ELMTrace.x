@@ -69,12 +69,23 @@ static NSString *elmtStr(id o) {
 // NOTE: -actionsForRenderers: was traced here originally to confirm the menu funnel. That's
 // now settled AND the shipped queue feature hooks that same selector in YTLite.x
 // (ytlInjectQueueActions), so tracing it here too would be a duplicate-symbol clash — removed.
+// For the community-post feasibility question we need MORE than "a menu fired": we need to know,
+// at menu-build time, (a) is this a POST menu (renderer items / fromView node-id), and (b) can we
+// reach the post's images from `fromView`/`entry` — i.e. is migrating our post actions off the
+// custom long-press onto native-menu injection viable. So log fromView + entry too. A _ASDisplayView's
+// -description embeds its ELM node id (e.g. `id.ui.backstage.post`), so elmtStr(view) reveals it.
 %hook YTMenuController
 - (void)showMenuWithMenuRenderer:(id)renderer fromView:(id)view entry:(id)entry firstResponder:(id)responder {
-    ELMT(@"MENU.show(4)  %@", elmtStr(renderer)); %orig;
+    ELMT(@"MENU.show(4) rndr=%@", elmtStr(renderer));
+    ELMT(@"  fromView=%@", elmtStr(view));
+    ELMT(@"  entry=%@", elmtStr(entry));
+    %orig;
 }
 - (void)showMenuWithMenuRenderer:(id)renderer fromView:(id)view entry:(id)entry dismissalBlock:(id)block addCancelAction:(BOOL)cancel shouldLogItems:(BOOL)logItems firstResponder:(id)responder completion:(id)completion {
-    ELMT(@"MENU.show(8)  %@", elmtStr(renderer)); %orig;
+    ELMT(@"MENU.show(8) rndr=%@", elmtStr(renderer));
+    ELMT(@"  fromView=%@", elmtStr(view));
+    ELMT(@"  entry=%@", elmtStr(entry));
+    %orig;
 }
 %end
 
