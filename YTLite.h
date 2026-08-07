@@ -18,6 +18,13 @@
 // Settings.x (export/clear) resolve the same path. Gated on the `pipDiagLog` toggle.
 #define YTL_PIP_LOG_NAME @"YTLitePiPLog.txt"
 
+// Any diagnostic/logging build (POST_DEBUG or the ELM_RE tracer) defines this. Used to add a
+// visible at-a-glance marker (home wordmark cropped to "You") so a device running a debug build
+// is instantly distinguishable from a clean release. Never defined in a normal build.
+#if defined(YTL_POST_DEBUG) || defined(YTL_ELM_RE)
+#define YTL_DEBUG_BUILD 1
+#endif
+
 @interface YTTouchFeedbackController : YTCollectionViewCell
 @property (nonatomic, strong, readwrite) UIColor *feedbackColor;
 @end
