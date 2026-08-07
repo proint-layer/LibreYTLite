@@ -133,6 +133,12 @@ static void ytlPipEvent(NSString *event);
 - (BOOL)pictureInPictureActive;
 - (void)activatePiPController;
 @end
+// YouTube renamed this class MLPIPController -> MLPIPControllerImpl in 21.31.x. Declaring the new
+// name as a (compile-time) subclass of the old lets ONE set of types + selector decls cover both,
+// so we hook both class names below with identical bodies; whichever is absent on a given YouTube
+// build just no-ops at %init (objc_getClass returns nil). See [MLPIP dual-hook] in the two %hook
+// blocks -- keep them in sync. (21.25.x = MLPIPController, 21.31.x = MLPIPControllerImpl.)
+@interface MLPIPControllerImpl : MLPIPController @end
 static __weak MLPIPController *gYTLPipController;   // last live PiP controller (for the re-arm + bg check)
 static BOOL gYTLPipEverStarted;                     // did PiP start at least once this session?
 
@@ -188,6 +194,29 @@ static void ytlPipRearm(MLPIPController *pip) {
 - (void)pictureInPictureControllerWillStopPictureInPicture:(id)c { ytlPipEvent(@"willStop"); %orig; }
 // The "tap the PiP window to return to the app" path (distinct from an auto-stop) -- the exact
 // flow in the bug report. If `possible` drops here and doesn't recover, that's the culprit.
+- (void)pictureInPictureController:(id)c restoreUserInterfaceForPictureInPictureStopWithCompletionHandler:(id)handler {
+    ytlPipEvent([NSString stringWithFormat:@"restoreUI (possible=%d)", [self pictureInPicturePossible]]); %orig;
+}
+%end
+
+// [MLPIP dual-hook] Exact mirror of the block above for YouTube 21.31.x, where MLPIPController was
+// renamed MLPIPControllerImpl. Bodies are identical -- keep in sync. Only one of the two class names
+// exists on any given YouTube build, so the other %hook simply no-ops at %init.
+%hook MLPIPControllerImpl
+- (void)startPictureInPictureWithPaused:(BOOL)paused {
+    gYTLPipController = self;
+    ytlPipEvent([NSString stringWithFormat:@"start(inApp) paused=%d possible=%d active=%d", paused, [self pictureInPicturePossible], [self pictureInPictureActive]]);
+    %orig;
+}
+- (void)stopPictureInPicture               { gYTLPipController = self; ytlPipEvent([NSString stringWithFormat:@"stop (active=%d)", [self pictureInPictureActive]]); %orig; }
+- (void)activatePiPController              { gYTLPipController = self; ytlPipEvent([NSString stringWithFormat:@"activate (possible=%d)", [self pictureInPicturePossible]]); %orig; }
+- (void)deactivatePiPController            { gYTLPipController = self; ytlPipEvent(@"deactivate"); %orig; }
+- (void)renderingViewWillRecreateDisplayLayer { ytlPipEvent(@"recreateDisplayLayer"); %orig; ytlPipRearm(self); }
+- (void)pictureInPictureControllerWillStartPictureInPicture:(id)c { ytlPipEvent([NSString stringWithFormat:@"willStart possible=%d", [self pictureInPicturePossible]]); %orig; }
+- (void)pictureInPictureControllerDidStartPictureInPicture:(id)c { gYTLPipEverStarted = YES; ytlPipEvent(@"didStart"); %orig; }
+- (void)pictureInPictureControllerDidStopPictureInPicture:(id)c  { ytlPipEvent([NSString stringWithFormat:@"didStop (possible=%d)", [self pictureInPicturePossible]]); %orig; }
+- (void)pictureInPictureController:(id)c failedToStartPictureInPictureWithError:(id)error { ytlPipEvent([NSString stringWithFormat:@"FAILED %@", error]); %orig; }
+- (void)pictureInPictureControllerWillStopPictureInPicture:(id)c { ytlPipEvent(@"willStop"); %orig; }
 - (void)pictureInPictureController:(id)c restoreUserInterfaceForPictureInPictureStopWithCompletionHandler:(id)handler {
     ytlPipEvent([NSString stringWithFormat:@"restoreUI (possible=%d)", [self pictureInPicturePossible]]); %orig;
 }
