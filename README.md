@@ -6,6 +6,10 @@ A clean, open-source fork of [YTLite](https://github.com/Dayanch96/YTLite), bran
 
 Fork this repo and trigger the **Build YTLite IPA** workflow from the Actions tab. Paste a decrypted YouTube IPA URL and select which bundled tweaks to include. The patched IPA is uploaded as an artifact.
 
+## Compatibility
+
+Verified against **YouTube 21.25.5** and **21.31.3**. LibreYTLite tracks a rolling window of recent major YouTube versions: when a new major version lands, the hooks are audited against it and any renamed classes/selectors are dual-hooked so earlier versions keep working (e.g. `MLPIPController` → `MLPIPControllerImpl` in 21.31.x). Versions outside the tested window may still work but aren't verified — prefer a YouTube IPA from the tested set.
+
 ## Features
 
 - Ad blocking (pre-roll, banner, and overlay ads)
