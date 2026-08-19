@@ -26,8 +26,38 @@ Verified against **YouTube 21.25.5** and **21.31.3**. LibreYTLite tracks a rolli
 - Watch queue — a client-side play queue with a reorderable viewer (long-press a video → *Add to queue*)
 - Community-post image viewer — tap to zoom, page multi-image galleries, save to Photos
 - Remove share identifier — strips YouTube's `si=` tracking parameter from links you share
+- Open YouTube links in the app — route links from Safari (or any app) into LibreYTLite instead of stock YouTube ([setup below](#open-youtube-links-in-the-app))
 - Native iOS share sheet
 - And everything else from the original YTLite settings
+
+## Open YouTube links in the app
+
+By default, tapping a YouTube link — or "Open in YouTube" — sends you to the **stock** app, because a sideloaded build can't claim YouTube's universal links. LibreYTLite registers its own `libreyt://` URL scheme so you can route links here instead. Pick either method (or both).
+
+**Prerequisite:** build/install LibreYTLite **4.6.0 or later** (the scheme is registered at build time).
+
+### A. From the share sheet — no extra app
+
+Add a one-action Shortcut that shows up in Safari's share sheet:
+
+1. Open the **Shortcuts** app → **＋** (new shortcut) → name it **Open in LibreYTLite**.
+2. Tap ⓘ → turn on **Show in Share Sheet**; set **Accepted Types** to **URLs** (add *Safari web pages* if you like).
+3. Add a **Replace Text** action — input **Shortcut Input**, **Find** `^https?://` with **Regular Expression** ON, **Replace** with `libreyt://`.
+4. Add an **Open URLs** action fed by the Replace Text result.
+
+Now, on any YouTube page in Safari: **Share → Open in LibreYTLite**.
+
+### B. Automatically when you tap a link — RedirectWeb
+
+Use the App Store extension **[RedirectWeb](https://apps.apple.com/us/app/redirect-web-browser-ext/id1571283503)**. Because it's signed by Apple it works reliably — unlike a bundled Safari extension, which breaks when a sideloader re-signs it.
+
+1. Install **RedirectWeb** from the App Store.
+2. **Settings → Safari → Extensions → RedirectWeb** → enable it, and allow it on `youtube.com`.
+3. In RedirectWeb, add two redirect rules (regex with a capture group):
+   - `https?://(?:www\.|m\.)?youtube\.com/watch\?v=([\w-]+)` → `libreyt://watch?v=$1`
+   - `https?://youtu\.be/([\w-]+)` → `libreyt://youtu.be/$1`
+
+Tapping a YouTube link in Safari now routes it into LibreYTLite. Safari may ask you to confirm the app-open the first time — that's an iOS security prompt for launching an app from an extension, not a bug.
 
 ## Credits
 
