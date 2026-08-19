@@ -188,6 +188,17 @@ jobs:
             -n "${{ inputs.display_name }}" \
             -b "${{ inputs.bundle_id }}"
 
+      - name: Register open-in-app URL scheme (libreyt://)
+        run: |
+          # The YTAppDelegate openURL hook only fires if `libreyt` is a registered scheme. cyan can't
+          # append to an array key without clobbering it, so safe-append it here (append-only preserves
+          # YouTube's own schemes, incl. com.google.sso.* which sign-in needs). See AGENTS.md / README.
+          ipa="$PWD/YouTubePlus.ipa"
+          d=$(mktemp -d); cd "$d"
+          unzip -q "$ipa" "Payload/YouTube.app/Info.plist"
+          plutil -insert CFBundleURLTypes -json '{"CFBundleURLName":"com.libreyt.openinapp","CFBundleURLSchemes":["libreyt"]}' -append "Payload/YouTube.app/Info.plist"
+          zip -q "$ipa" "Payload/YouTube.app/Info.plist"
+
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
