@@ -73,6 +73,15 @@ cyan --overwrite -i youtube.ipa -o LibreYTLite.ipa \
      tweaks/Alderis/libcolorpicker.dylib \
      tweaks/Alderis/.theos/obj/install_Alderis.xcarchive/Products/Library/Frameworks/Alderis.framework
 ```
+
+**Open-in-app scheme (`libreyt://`)** — the `YTAppDelegate application:openURL:sourceApplication:annotation:` hook only fires if the app actually registers the `libreyt` URL scheme. cyan can't *append* to an array key without clobbering it, so after the inject, safe-append the scheme to `CFBundleURLTypes` (this preserves YouTube's own schemes — critically `com.google.sso.*`, the OAuth scheme login needs):
+```bash
+d=$(mktemp -d); (cd "$d" && unzip -q /abs/path/LibreYTLite.ipa "Payload/YouTube.app/Info.plist" \
+  && plutil -insert CFBundleURLTypes -json '{"CFBundleURLName":"com.libreyt.openinapp","CFBundleURLSchemes":["libreyt"]}' -append "Payload/YouTube.app/Info.plist" \
+  && zip -q /abs/path/LibreYTLite.ipa "Payload/YouTube.app/Info.plist")
+```
+Do NOT set a different bundle id for it — Sideloadly's automatic bundle id already mangles for coexistence, and keeping the base id lets the build update in place (login survives). The scheme is what the redirect keys off, not the id. (The GitHub Actions `package` job needs this same post-inject step.)
+
 iSponsorBlock is special: build `tweaks/Alderis` first, copy its `libcolorpicker.dylib` into `$THEOS/lib` **before** building `tweaks/iSponsorBlock`, and inject **both** `libcolorpicker.dylib` and `Alderis.framework` alongside the iSponsorBlock deb or it crashes on launch. (Alderis' `lcpshim`/libcolorpicker needs the `Preferences` private framework, which only exists in Theos' 16.5 SDK, not the Xcode SDK.)
 
 **GitHub Actions path (`.github/workflows/build.yml`)** — the supported/reproducible build. `workflow_dispatch` inputs: `ipa_url` (decrypted YouTube IPA), `display_name`, `bundle_id`, and `enable_*` toggles per optional tweak. Two jobs:
