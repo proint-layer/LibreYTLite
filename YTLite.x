@@ -579,6 +579,78 @@ static UIImage *ytlDebugCropLogo(UIImage *img) {
 }
 %end
 
+// ============================================================================
+// OPEN-IN-APP URL SCHEME (libreyt://) — hand a YouTube link from Safari to THIS patched app
+//   A Safari share Shortcut / action / web-extension opens `libreyt://watch?v=ID` (or
+//   `libreyt://open?url=<percent-encoded youtube url>`); we translate it to YouTube's OWN
+//   vnd.youtube://ID deeplink and pass it to %orig, so the app's native watch handling plays it.
+//   The `libreyt` scheme is registered in Info.plist at build time (append-only — see build step) and
+//   only this app claims it, so it survives Sideloadly's bundle-id mangling. YouTube has no scene
+//   manifest, so the classic YTAppDelegate application:openURL:options: is the entry point.
+// ============================================================================
+
+// Best-effort 11-char video id out of a standard YouTube URL string (watch?v / youtu.be / shorts /
+// embed / live / v). Returns nil if none found; the caller falls back to other forms.
+static NSString *ytlVideoIDFromYouTubeURLString(NSString *s) {
+    if (!s.length) return nil;
+    NSURL *u = [NSURL URLWithString:s];
+    if ([u.host.lowercaseString hasSuffix:@"youtu.be"] && u.path.length > 1)
+        return [[[u.path substringFromIndex:1] componentsSeparatedByString:@"/"] firstObject];
+    for (NSString *m in @[@"/shorts/", @"/embed/", @"/live/", @"/v/"]) {
+        NSRange r = [s rangeOfString:m];
+        if (r.location != NSNotFound)
+            return [[[s substringFromIndex:NSMaxRange(r)] componentsSeparatedByCharactersInSet:
+                     [NSCharacterSet characterSetWithCharactersInString:@"/?&#"]] firstObject];
+    }
+    for (NSURLQueryItem *q in [NSURLComponents componentsWithURL:(u ?: [NSURL new]) resolvingAgainstBaseURL:NO].queryItems)
+        if ([q.name isEqualToString:@"v"] && q.value.length) return q.value;
+    return nil;
+}
+
+// Extract the video id from the libreyt:// forms we accept.
+static NSString *ytlVideoIDFromLibreURL(NSURL *url) {
+    if (!url) return nil;
+    NSURLComponents *c = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+    NSString *v = nil, *embedded = nil;
+    for (NSURLQueryItem *q in c.queryItems) {
+        if ([q.name isEqualToString:@"v"] && q.value.length) v = q.value;                    // libreyt://watch?v=ID
+        else if ([q.name isEqualToString:@"url"] && q.value.length) embedded = q.value;      // libreyt://open?url=<enc>
+    }
+    if (v.length) return v;
+    if (embedded.length) {
+        NSString *dec = [embedded stringByRemovingPercentEncoding] ?: embedded;
+        NSString *fromEmbedded = ytlVideoIDFromYouTubeURLString(dec);
+        if (fromEmbedded.length) return fromEmbedded;
+    }
+    NSString *host = c.host.lowercaseString;
+    if ([host isEqualToString:@"youtu.be"] || [host hasSuffix:@"youtube.com"])               // libreyt://youtu.be/ID
+        return ytlVideoIDFromYouTubeURLString([url.absoluteString stringByReplacingOccurrencesOfString:@"libreyt://" withString:@"https://"]);
+    if (c.host.length) return c.host;                                                        // libreyt://VIDEOID
+    return nil;
+}
+
+// Static analysis (ipsw class-dump, 21.25.5) shows YTAppDelegate implements the LEGACY
+// application:openURL:sourceApplication:annotation: — NOT the modern openURL:options: variant — so iOS
+// delivers custom-scheme opens HERE. Hooking openURL:options: would silently never fire. The leading
+// YTLDBG is a path-trace (debug only) so an on-device test proves this is the live entry point.
+@interface YTAppDelegate : NSObject @end
+%hook YTAppDelegate
+- (BOOL)application:(UIApplication *)application openURL:(NSURL *)url sourceApplication:(NSString *)sourceApplication annotation:(id)annotation {
+    YTLDBG(@"openURL(legacy): scheme=%@ url=%@", url.scheme, url.absoluteString);
+    if ([url.scheme.lowercaseString isEqualToString:@"libreyt"]) {
+        NSString *vid = ytlVideoIDFromLibreURL(url);
+        if (vid.length) {
+            NSURL *native = [NSURL URLWithString:[@"vnd.youtube://" stringByAppendingString:vid]];
+            YTLDBG(@"open-in-app: %@ -> %@", url.absoluteString, native.absoluteString);
+            if (native) return %orig(application, native, sourceApplication, annotation);
+        }
+        YTLDBG(@"open-in-app: no video id in %@", url.absoluteString);
+        return NO;
+    }
+    return %orig;
+}
+%end
+
 // Remove Subbar
 %hook YTMySubsFilterHeaderView
 - (void)setChipFilterView:(id)arg1 { if (!ytlBool(@"noSubbar")) %orig; }
