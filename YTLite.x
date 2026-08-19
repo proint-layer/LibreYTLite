@@ -633,15 +633,27 @@ static NSString *ytlVideoIDFromLibreURL(NSURL *url) {
 // application:openURL:sourceApplication:annotation: — NOT the modern openURL:options: variant — so iOS
 // delivers custom-scheme opens HERE. Hooking openURL:options: would silently never fire. The leading
 // YTLDBG is a path-trace (debug only) so an on-device test proves this is the live entry point.
-@interface YTAppDelegate : NSObject @end
+@interface YTAppDelegate : NSObject
+- (BOOL)application:(UIApplication *)application continueUserActivity:(NSUserActivity *)activity restorationHandler:(void (^)(NSArray<id<UIUserActivityRestoring>> *))restorationHandler;
+@end
 %hook YTAppDelegate
 - (BOOL)application:(UIApplication *)application openURL:(NSURL *)url sourceApplication:(NSString *)sourceApplication annotation:(id)annotation {
     YTLDBG(@"openURL(legacy): scheme=%@ url=%@", url.scheme, url.absoluteString);
     if ([url.scheme.lowercaseString isEqualToString:@"libreyt"]) {
         NSString *vid = ytlVideoIDFromLibreURL(url);
         if (vid.length) {
+            // Drive the app's UNIVERSAL-LINK path (the same handler a real youtube.com tap uses), which
+            // navigates to the watch page. The vnd.youtube://<id> scheme only opened the app to Home on
+            // the logged-in full build (static analysis: watch nav is a watchEndpoint command, not URL
+            // re-parsing). Fall back to the scheme deeplink only if the activity path declines.
+            NSString *watch = [@"https://www.youtube.com/watch?v=" stringByAppendingString:vid];
+            NSUserActivity *act = [[NSUserActivity alloc] initWithActivityType:NSUserActivityTypeBrowsingWeb];
+            act.webpageURL = [NSURL URLWithString:watch];
+            BOOL handled = [self application:application continueUserActivity:act restorationHandler:^(NSArray<id<UIUserActivityRestoring>> *r){}];
+            YTLDBG(@"open-in-app: %@ -> continueUserActivity %@ handled=%d", url.absoluteString, watch, handled);
+            if (handled) return YES;
             NSURL *native = [NSURL URLWithString:[@"vnd.youtube://" stringByAppendingString:vid]];
-            YTLDBG(@"open-in-app: %@ -> %@", url.absoluteString, native.absoluteString);
+            YTLDBG(@"open-in-app: fallback -> %@", native.absoluteString);
             if (native) return %orig(application, native, sourceApplication, annotation);
         }
         YTLDBG(@"open-in-app: no video id in %@", url.absoluteString);
