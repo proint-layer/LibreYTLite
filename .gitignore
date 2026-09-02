@@ -3,6 +3,7 @@
 packages/*.deb
 *.deb
 *.ipa
+*.ips
 diff.txt
 console
 HANDOFF.md

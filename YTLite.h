@@ -170,7 +170,8 @@
 @end
 
 @interface YTMainAppControlsOverlayView : UIView
-@property (nonatomic, strong, readwrite) YTPlayerViewController *playerViewController;
+// NB: this class has NO -playerViewController on YT 21.x — do not add/call it (unrecognized
+// selector → crash). Reach the player via the tracked gYTLPlayer instead.
 @end
 
 @interface YTReelWatchRootViewController : UIViewController

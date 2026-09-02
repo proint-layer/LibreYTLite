@@ -20,7 +20,6 @@
  */
 
 #import "YTLite.h"
-#import "Utils/YTLDownloadManager.h"
 
 #if defined(YTL_POST_DEBUG)
 #import <os/log.h>
@@ -682,6 +681,12 @@ static NSString *ytlVideoIDFromLibreURL(NSURL *url) {
 }
 %end
 
+// The live player (weak → auto-nils), latched in didActivateNewPlaybackWithContentVideo: below.
+// Declared up here so the overlay hooks can reach the player WITHOUT walking to a
+// -playerViewController that doesn't exist on YT 21.x (YTMainAppControlsOverlayView has no such
+// selector → unrecognized-selector crash; see the queue-paddle + pauseOnOverlay hooks).
+static __weak YTPlayerViewController *gYTLPlayer;
+
 %hook YTMainAppControlsOverlayView
 // Hide Autoplay Switch
 - (void)setAutoplaySwitchButtonRenderer:(id)arg1 { if (!ytlBool(@"hideAutoplay")) %orig; }
@@ -695,7 +700,8 @@ static NSString *ytlVideoIDFromLibreURL(NSURL *url) {
 
     if (!ytlBool(@"pauseOnOverlay")) return;
 
-    visible ? [self.playerViewController pause] : [self.playerViewController play];
+    // gYTLPlayer, not self.playerViewController — this overlay class has no such selector on YT 21.x.
+    visible ? [gYTLPlayer pause] : [gYTLPlayer play];
 }
 %end
 
@@ -823,12 +829,11 @@ static NSString *ytlVideoIDFromLibreURL(NSURL *url) {
 + (instancetype)eventWithMessage:(NSString *)message infoType:(NSInteger)infoType duration:(double)duration firstResponder:(id)firstResponder;
 @end
 
-// Queue session state. gYTLPlayer: the live player (weak, so it auto-nils). gYTLQueueEngaged:
-// is the current playback session following our queue? (Only then do we auto-advance -- so
-// exiting and later watching something unrelated won't get hijacked by a stale queue.)
-// gYTLExpectingQueueLoad: set right before WE navigate to a queued video, so the upcoming
+// Queue session state. (gYTLPlayer — the live player — is declared up near the overlay hooks.)
+// gYTLQueueEngaged: is the current playback session following our queue? (Only then do we
+// auto-advance -- so exiting and later watching something unrelated won't get hijacked by a stale
+// queue.) gYTLExpectingQueueLoad: set right before WE navigate to a queued video, so the upcoming
 // load is recognized as queue-driven (vs. the user opening something else).
-static __weak YTPlayerViewController *gYTLPlayer;
 static BOOL gYTLQueueEngaged;
 static BOOL gYTLExpectingQueueLoad;
 // A video is "active" (open, full-screen or in the miniplayer) when we hold a live player whose
@@ -1164,36 +1169,38 @@ static void ytlPresentQueueViewer(void) {
 @end
 // True when we should drive the paddles: queue enabled + non-empty + a singleton video (not a
 // real playlist). Everything below hangs off this -- no subview added, so iSB is untouched.
-static BOOL ytlQueuePaddlesActive(YTMainAppControlsOverlayView *overlay) {
-    return ytlBool(@"enableQueue") && ytlBool(@"queuePaddles") && [YTLQueueManager shared].count > 0
-        && [(id<YTLPlayerNav>)overlay.playerViewController playlistControlsHidden];
+static BOOL ytlQueuePaddlesActive(void) {
+    if (!ytlBool(@"enableQueue") || !ytlBool(@"queuePaddles") || [YTLQueueManager shared].count == 0) return NO;
+    // Use the tracked live player, NOT overlay.playerViewController: YTMainAppControlsOverlayView has
+    // no -playerViewController on YT 21.x, so touching it was an unrecognized-selector crash (fired
+    // once the queue was non-empty and the overlay redrew its paddles → the "random" crash).
+    YTPlayerViewController *pvc = gYTLPlayer;
+    return pvc && [pvc respondsToSelector:@selector(playlistControlsHidden)]
+        && [(id<YTLPlayerNav>)pvc playlistControlsHidden];
 }
 %hook YTMainAppControlsOverlayView
 // Reveal + enable the native paddles (singletons hide them by default) so our queue is reachable.
-- (void)setNextButtonHidden:(BOOL)hidden      { %orig(ytlQueuePaddlesActive(self) ? NO  : hidden);  }
-- (void)setNextButtonEnabled:(BOOL)enabled    { %orig(ytlQueuePaddlesActive(self) ? YES : enabled); }
-- (void)setPreviousButtonHidden:(BOOL)hidden  { %orig(ytlQueuePaddlesActive(self) ? NO  : hidden);  }
-- (void)setPreviousButtonEnabled:(BOOL)enabled{ %orig(ytlQueuePaddlesActive(self) ? YES : enabled); }
+- (void)setNextButtonHidden:(BOOL)hidden      { %orig(ytlQueuePaddlesActive() ? NO  : hidden);  }
+- (void)setNextButtonEnabled:(BOOL)enabled    { %orig(ytlQueuePaddlesActive() ? YES : enabled); }
+- (void)setPreviousButtonHidden:(BOOL)hidden  { %orig(ytlQueuePaddlesActive() ? NO  : hidden);  }
+- (void)setPreviousButtonEnabled:(BOOL)enabled{ %orig(ytlQueuePaddlesActive() ? YES : enabled); }
 // Next paddle -> play the next queued video; Previous paddle -> open the queue viewer. In a real
 // playlist ytlQueuePaddlesActive is NO, so both fall through to YouTube's native navigation.
 - (void)didPressNext:(id)next {
-    if (ytlQueuePaddlesActive(self)) {
+    if (ytlQueuePaddlesActive()) {
         NSString *vid = [[YTLQueueManager shared] dequeue];
         YTLDBG(@"overlay-next: play queued %@ (remaining=%lu)", vid, (unsigned long)[YTLQueueManager shared].count);
-        if (vid.length) { gYTLQueueEngaged = YES; ytlPlayVideoID(vid, self.playerViewController); return; }
+        if (vid.length) { gYTLQueueEngaged = YES; ytlPlayVideoID(vid, gYTLPlayer); return; }
     }
-    YTLDBG(@"overlay-next: defer to native (singleton=%d count=%lu)",
-           [(id<YTLPlayerNav>)self.playerViewController playlistControlsHidden], (unsigned long)[YTLQueueManager shared].count);
+    YTLDBG(@"overlay-next: defer to native (count=%lu)", (unsigned long)[YTLQueueManager shared].count);
     %orig;
 }
 - (void)didPressPrevious:(id)previous {
-    if (ytlQueuePaddlesActive(self)) {
+    if (ytlQueuePaddlesActive()) {
         YTLDBG(@"overlay-prev: open queue viewer");
         ytlPresentQueueViewer();
         return;
     }
-    YTLDBG(@"overlay-prev: defer to native (singleton=%d)",
-           [(id<YTLPlayerNav>)self.playerViewController playlistControlsHidden]);
     %orig;
 }
 %end
@@ -1956,23 +1963,6 @@ static id ytlInjectQueueActions(id actions, UIView *fromView, id responder) {
     return out;
 }
 
-// -- DOWNLOAD: inject "Download audio" into YouTube's own video menu ----------------------
-// Same choke point + same anchor→videoID resolution as the queue. Gated independently on
-// `enableDownloads` (a download is unrelated to the queue). The whole download job — its own
-// InnerTube /player request (ANDROID_VR client), format pick, fetch, and "Save to Files" —
-// lives in Utils/YTLDownloadManager; this only supplies the row and the videoID.
-static id ytlInjectDownloadActions(id actions, UIView *fromView) {
-    if (!ytlBool(@"enableDownloads") || ![actions isKindOfClass:[NSArray class]]) return actions;
-    NSString *videoID = ytlVideoIDForAnchorView(fromView);
-    if (!videoID.length) return actions;   // not a video menu (comment/channel/post overflow)
-    NSMutableArray *out = [actions mutableCopy];
-    [out addObject:[%c(YTActionSheetAction) actionWithTitle:LOC(@"DownloadAudio")
-        iconImage:ytlMenuIcon(@[@"yt_outline_download_24pt", @"ic_offline_download"], @"arrow.down.circle")
-        style:0 handler:^{ [YTLDownloadManager downloadAudioForVideoID:videoID]; }]];
-    YTLDBG(@"menu-dl: appended for vid=%@", videoID);
-    return out;
-}
-
 // Community-post image actions injected into the SAME native ⋯ menu. Defined in the community-post
 // section below (needs ytlDescIsPost + the post-image node walk); forward-declared here for the hook.
 // `entry` is the menu's element renderer — the view-independent fallback for surfaces (Posts detail,
@@ -1985,12 +1975,10 @@ static id ytlInjectPostActions(id actions, UIView *fromView, id entry);
 // home long-press, channel-Videos ⋯ + long-press). Hooking the sibling too would double-append
 // if one calls the other.
 - (id)actionsForRenderers:(id)renderers fromView:(UIView *)view entry:(id)entry shouldLogItems:(BOOL)items firstResponder:(id)responder {
-    // Chain the injectors on the one menu choke point. A given menu is either a video's or a
-    // post's, so exactly one of queue/post appends; the other no-ops. Download rides the same
-    // video-ID resolution as the queue, gated separately.
-    id withQueue = ytlInjectQueueActions(%orig, view, responder);
-    id withDownload = ytlInjectDownloadActions(withQueue, view);
-    return ytlInjectPostActions(withDownload, view, entry);
+    // Chain both injectors on the one menu choke point. A given menu is either a video's or a
+    // post's, so exactly one appends; the other no-ops (queue finds no video ID / post finds no
+    // backstage container).
+    return ytlInjectPostActions(ytlInjectQueueActions(%orig, view, responder), view, entry);
 }
 %end
 

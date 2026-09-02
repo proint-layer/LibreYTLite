@@ -61,8 +61,6 @@
 "EnableQueueDesc" = "Adds a watch queue: use the ⋯ menu on any video to add it, and queued videos play in order automatically when the current one ends. A free reimplementation of the Premium-only queue.";
 "QueuePaddles" = "Queue buttons on player";
 "QueuePaddlesDesc" = "When the queue has items, the player's next/previous paddles drive it on non-playlist videos: next plays the next queued video, previous opens the queue. Turn off to always keep YouTube's native next/previous.";
-"EnableDownloads" = "Download audio";
-"EnableDownloadsDesc" = "Adds a \"Download audio\" row to the ⋯ menu on any video. Fetches the track as an .m4a and hands it to the share sheet so you can Save to Files. Works by asking YouTube for the audio directly (not from the player), so it downloads even when the in-app download button is unavailable.";
 "PipReentryFix" = "Fix PiP re-entry";
 "PipReentryFixDesc" = "Works around YouTube's intermittent bug where Picture-in-Picture fails to start on a home swipe after you've returned to the app, until the video reloads. Re-arms YouTube's own PiP once the player is ready again. On by default; turn off if PiP misbehaves.";
 "PipDiagLog" = "PiP diagnostic log";
@@ -70,7 +68,6 @@
 "ExportPipLog" = "Export PiP log";
 "ClearPipLog" = "Clear PiP log";
 "PipLogEmpty" = "PiP log is empty";
-"DownloadAudio" = "Download audio";
 "AddToQueue" = "Add to queue";
 "AddedToQueue" = "Added to queue";
 "RemoveFromQueue" = "Remove from queue";

@@ -22,7 +22,6 @@ Verified against **YouTube 21.25.5** and **21.31.3**. LibreYTLite tracks a rolli
 - Tab bar customization
 - iSponsorBlock (crowd-sourced sponsor-segment skipping)
 - Watch queue — a client-side play queue with a reorderable viewer (long-press a video → *Add to queue*)
-- Download audio — save any video's audio as an `.m4a` via the ⋯ menu ([details below](#download-audio))
 - Community-post image viewer — tap to zoom, page multi-image galleries, save to Photos
 - Remove share identifier — strips YouTube's `si=` tracking parameter from links you share
 - Open YouTube links in the app — route links from Safari (or any app) into LibreYTLite instead of stock YouTube ([setup below](#open-youtube-links-in-the-app))
@@ -30,19 +29,6 @@ Verified against **YouTube 21.25.5** and **21.31.3**. LibreYTLite tracks a rolli
 - And everything else from the original YTLite settings
 
 > **Want 4K / high-bitrate video or the in-player quality switcher?** Those extras (YTUHD + YouQuality, via YTVideoOverlay) live on the [`full`](../../tree/full) branch. `main` is the leaner default without them.
-
-## Download audio
-
-Open the **⋯ menu** on any video (in the feed, search, or a channel's *Videos* grid) and tap **Download audio**. A progress dialog appears, then the iOS share sheet — choose **Save to Files** (or AirDrop, etc.). The result is a ready-to-play `.m4a` (AAC).
-
-Toggle it under **Settings → LibreYTLite → Player → Download audio** (on by default).
-
-**How it works — and why it still works.** Modern YouTube withholds per-format stream URLs from the app itself (SABR/Onesie streaming), so the app's own download path comes up empty on many accounts. LibreYTLite sidesteps that: it makes its **own** lightweight request to YouTube impersonating the Oculus/Quest client, which still returns a normal downloadable URL, then fetches the track directly. To get past YouTube's "confirm you're not a bot" check it first primes a throwaway **anonymous visitor session** — in an isolated cookie jar, so **your account is never used or touched** (no login, no soft-ban risk).
-
-**Current limits (v1):**
-- Audio only. Video (muxed with the bundled encoder) is planned.
-- The row appears on video *cells*, not the in-player ⋯ menu yet.
-- Age-restricted, private, and members-only videos aren't supported (they'd require signing in, which this deliberately avoids).
 
 ## Open YouTube links in the app
 
