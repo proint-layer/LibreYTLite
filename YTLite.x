@@ -20,6 +20,7 @@
  */
 
 #import "YTLite.h"
+#import "Utils/YTLDownloadManager.h"
 
 #if defined(YTL_POST_DEBUG)
 #import <os/log.h>
@@ -1955,6 +1956,23 @@ static id ytlInjectQueueActions(id actions, UIView *fromView, id responder) {
     return out;
 }
 
+// -- DOWNLOAD: inject "Download audio" into YouTube's own video menu ----------------------
+// Same choke point + same anchor→videoID resolution as the queue. Gated independently on
+// `enableDownloads` (a download is unrelated to the queue). The whole download job — its own
+// InnerTube /player request (ANDROID_VR client), format pick, fetch, and "Save to Files" —
+// lives in Utils/YTLDownloadManager; this only supplies the row and the videoID.
+static id ytlInjectDownloadActions(id actions, UIView *fromView) {
+    if (!ytlBool(@"enableDownloads") || ![actions isKindOfClass:[NSArray class]]) return actions;
+    NSString *videoID = ytlVideoIDForAnchorView(fromView);
+    if (!videoID.length) return actions;   // not a video menu (comment/channel/post overflow)
+    NSMutableArray *out = [actions mutableCopy];
+    [out addObject:[%c(YTActionSheetAction) actionWithTitle:LOC(@"DownloadAudio")
+        iconImage:ytlMenuIcon(@[@"yt_outline_download_24pt", @"ic_offline_download"], @"arrow.down.circle")
+        style:0 handler:^{ [YTLDownloadManager downloadAudioForVideoID:videoID]; }]];
+    YTLDBG(@"menu-dl: appended for vid=%@", videoID);
+    return out;
+}
+
 // Community-post image actions injected into the SAME native ⋯ menu. Defined in the community-post
 // section below (needs ytlDescIsPost + the post-image node walk); forward-declared here for the hook.
 // `entry` is the menu's element renderer — the view-independent fallback for surfaces (Posts detail,
@@ -1967,10 +1985,12 @@ static id ytlInjectPostActions(id actions, UIView *fromView, id entry);
 // home long-press, channel-Videos ⋯ + long-press). Hooking the sibling too would double-append
 // if one calls the other.
 - (id)actionsForRenderers:(id)renderers fromView:(UIView *)view entry:(id)entry shouldLogItems:(BOOL)items firstResponder:(id)responder {
-    // Chain both injectors on the one menu choke point. A given menu is either a video's or a
-    // post's, so exactly one appends; the other no-ops (queue finds no video ID / post finds no
-    // backstage container). Post-menu delivery is a companion to the long-press, which stays.
-    return ytlInjectPostActions(ytlInjectQueueActions(%orig, view, responder), view, entry);
+    // Chain the injectors on the one menu choke point. A given menu is either a video's or a
+    // post's, so exactly one of queue/post appends; the other no-ops. Download rides the same
+    // video-ID resolution as the queue, gated separately.
+    id withQueue = ytlInjectQueueActions(%orig, view, responder);
+    id withDownload = ytlInjectDownloadActions(withQueue, view);
+    return ytlInjectPostActions(withDownload, view, entry);
 }
 %end
 
