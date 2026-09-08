@@ -895,7 +895,18 @@ static void ytlPlayVideoID(NSString *videoID, id responder) {
     if (!videoID.length) { YTLDBG(@"play: bail -- empty id"); return; }
     gYTLExpectingQueueLoad = YES; // this navigation is queue-driven; keep the session engaged
     YTICommand *cmd = [%c(YTICommand) watchNavigationEndpointWithVideoID:videoID];
-    if (!responder) responder = [%c(YTUIUtils) topViewControllerForPresenting];
+    // YouTube dispatches the command by walking the responder chain with -parentResponder, so the
+    // responder we hand it MUST implement that selector. A plain UIViewController does not: passing
+    // the top VC blind crashed (unrecognized selector -> NSInvalidArgumentException) when it was our
+    // own queue viewer / its UINavigationController, which is exactly what topViewControllerForPresenting
+    // returns while that sheet is still finishing its dismiss transition. So: prefer the live player
+    // (YTPlayerViewController does implement it), then a top VC only if it actually responds, else
+    // fall through to the openURL path below rather than sending into a bad chain.
+    if (![responder respondsToSelector:@selector(parentResponder)]) responder = gYTLPlayer;
+    if (![responder respondsToSelector:@selector(parentResponder)]) {
+        id top = [%c(YTUIUtils) topViewControllerForPresenting];
+        responder = [top respondsToSelector:@selector(parentResponder)] ? top : nil;
+    }
     YTLDBG(@"play: vid=%@ cmd=%d responder=%@ activePlayer=%d", videoID, cmd != nil, [responder class], gYTLPlayer != nil);
     if (cmd && responder) {
         [[%c(YTCommandResponderEvent) eventWithCommand:cmd entry:nil sendClick:YES firstResponder:responder] send];
