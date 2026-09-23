@@ -241,6 +241,12 @@
 @interface YTReelPlayerButton : YTQTMButton
 @end
 
+// YouTube renamed this class YTReelPlayerButton -> YTReelPlayerPivotButton in 21.36.x (the Shorts
+// sound/pivot button; same YTQTMButton superclass). Declared as a subclass of the old name so one
+// set of type/selector decls covers both -- see the dual-hook pair in YTLite.x.
+@interface YTReelPlayerPivotButton : YTReelPlayerButton
+@end
+
 @interface ELMCellNode
 @end
 

@@ -234,6 +234,31 @@ static void ytlPipRearm(MLPIPController *pip) {
 - (NSMutableArray *)adSlotsArray      { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; } // ...and here too.
 %end
 
+// Shorts / Reels ads. The YTIPlayerResponse hook above only covers the WATCH page; the Shorts path
+// carries its own adSlotsArray in several other messages, which is why sponsored Shorts still showed
+// up in the scroll rotation. YTIReelWatchSequenceAdsConfig is the one that injects ads into the
+// sequence you scroll through; YTIReelItemWatchResponse has its own slots separate from its nested
+// playerResponse. All five classes verified present on 21.25.5 / 21.31.3 / 21.36.6.
+%hook YTIReelWatchSequenceAdsConfig
+- (NSMutableArray *)adSlotsArray { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; }
+%end
+
+%hook YTIReelItemWatchResponse
+- (NSMutableArray *)adSlotsArray { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; }
+%end
+
+%hook YTIShortsAdsRenderer
+- (NSMutableArray *)adSlotsArray { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; }
+%end
+
+%hook YTIReelNonVideoAdRenderer
+- (NSMutableArray *)adSlotsArray { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; }
+%end
+
+%hook YTIReelPlayerOverlayRenderer
+- (NSMutableArray *)adSlotsArray { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; }
+%end
+
 // Spam signals are the fingerprinting blob the app ships with ad requests.
 // Hand back nil and it stops asking about ads with our device in tow.
 // (YT 21.x moved these off YTDataUtils onto YTAdShieldUtils -- both are +class methods.)
@@ -1620,6 +1645,19 @@ void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video
 }
 %end
 
+// Same fix for 21.36.x, which renamed the class YTReelPlayerButton -> YTReelPlayerPivotButton.
+// Dual-hook: whichever class is absent on a given build no-ops at %init (objc_getClass -> nil).
+// Keep this body in sync with the one above. (21.25/21.31 = YTReelPlayerButton,
+// 21.36+ = YTReelPlayerPivotButton.)
+%hook YTReelPlayerPivotButton
+- (UILabel *)titleLabel {
+    UILabel *label = %orig;
+    label.adjustsFontSizeToFitWidth = YES;
+
+    return label;
+}
+%end
+
 // Fix Playlist Mini-bar Height For Small Screens
 %hook YTPlaylistMiniBarView
 - (void)setFrame:(CGRect)frame {
@@ -1763,6 +1801,14 @@ static BOOL findCell(ASNodeController *nodeController, NSArray <NSString *> *ide
 - (void)setShareButton:(id)arg1 { if (!ytlBool(@"hideShortsShare")) %orig; }
 - (void)setNativePivotButton:(id)arg1 { if (!ytlBool(@"hideShortsAvatars")) %orig; }
 - (void)setPivotButtonElementRenderer:(id)arg1 { if (!ytlBool(@"hideShortsAvatars")) %orig; }
+%end
+
+// LIVE replacement for the dead per-button setters above. YouTube drives the Shorts right-hand
+// button column through one element renderer now, so we can't hide buttons individually without
+// walking ELM nodes -- but we CAN drop the whole column. Present on 21.25.5/21.31.3/21.36.6, so
+// this works across the whole support window (unlike the per-button setters, which never fired).
+%hook YTReelWatchPlaybackOverlayView
+- (void)setActionBarElementRenderer:(id)renderer { if (!ytlBool(@"hideShortsActionBar")) %orig; }
 %end
 
 %hook YTReelHeaderView

@@ -170,6 +170,8 @@
 "HideShortsShareDesc" = "Hides Share button from the Shorts overlay.";
 "HideShortsAvatars" = "Hide channels avatar";
 "HideShortsAvatarsDesc" = "Hides profile picture in the bottom right corner.";
+"HideShortsActionBar" = "Hide action bar";
+"HideShortsActionBarDesc" = "Hides the whole right-hand button column on Shorts (like, dislike, comments, remix, share). YouTube now draws these as one element, so they can only be hidden together \u2014 the individual Hide Like/Dislike/Comments/Remix/Share switches above no longer work on YouTube 21.x.";
 "HideShortsThanks" = "Hide Superthanks button";
 "HideShortsThanksDesc" = "Hides Superthanks (Donate) button from the Shorts overlay.";
 "HideShortsSource" = "Hide Shorts Source";
