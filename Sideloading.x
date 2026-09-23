@@ -61,6 +61,22 @@ static NSString *accessGroupID() {
 + (BOOL)isFromAppStore { return YES; }
 %end
 
+// Login source string — Google's SSO stack reports the calling app with this. Present on 21.25.5.
+// (Restored from upstream IAmYouTube; this had drifted out of our copy.)
+%hook SSOClientLogin
++ (NSString *)defaultSourceString { return YT_BUNDLE_ID; }
+%end
+
+// NOTE: upstream IAmYouTube also hooks
+//   -[YTHotConfig clientInfraClientConfigIosEnableFillingEncodedHacksInnertubeContext] -> NO
+// We deliberately DON'T: it is the only sideload hook that changes what the SERVER sends (it strips
+// client "encoded hacks" from the InnerTube context), and the community-post image viewer parses
+// those server-driven ELM payloads (id.ui.backstage.post / post_base_wrapper node ids). Suspected of
+// Login does not need it -- SSOClientLogin + the NSBundle spoof do the work. (It was briefly
+// suspected of breaking the community-post long-press; that turned out to be unrelated -- the
+// long-press is gated on the `postManager` default, which a clean reinstall had reset. Omitted here
+// purely to avoid changing server-sent payloads for no benefit.)
+
 %hook SSOConfiguration
 - (id)initWithClientID:(id)clientID supportedAccountServices:(id)supportedAccountServices {
     self = %orig;
@@ -70,22 +86,25 @@ static NSString *accessGroupID() {
 }
 %end
 
-BOOL isSelf() {
-    NSArray *address = [NSThread callStackReturnAddresses];
-    Dl_info info = {0};
-    if (dladdr((void *)[address[2] longLongValue], &info) == 0) return NO;
-    NSString *path = [NSString stringWithUTF8String:info.dli_fname];
-    return [path hasPrefix:NSBundle.mainBundle.bundlePath];
-}
+// Gate the bundle spoof on the RECEIVER being the main bundle, matching upstream IAmYouTube.
+// (We previously used a caller-stack dladdr check, which only spoofed when the CALLER was inside the
+// app bundle -- so a system framework asking on the app's behalf got the real id. Widened while
+// chasing the Google sign-in block.)
+#define isMainBundle() ([self isEqual:NSBundle.mainBundle])
 
 %hook NSBundle
++ (NSBundle *)bundleWithIdentifier:(NSString *)identifier {
+    if ([identifier isEqualToString:YT_BUNDLE_ID]) return NSBundle.mainBundle;
+    return %orig(identifier);
+}
+
 - (NSString *)bundleIdentifier {
-    return isSelf() ? YT_BUNDLE_ID : %orig;
+    return isMainBundle() ? YT_BUNDLE_ID : %orig;
 }
 
 - (NSDictionary *)infoDictionary {
     NSDictionary *dict = %orig;
-    if (!isSelf())
+    if (!isMainBundle())
         return %orig;
     NSMutableDictionary *info = [dict mutableCopy];
     if (info[@"CFBundleIdentifier"]) info[@"CFBundleIdentifier"] = YT_BUNDLE_ID;
@@ -95,7 +114,7 @@ BOOL isSelf() {
 }
 
 - (id)objectForInfoDictionaryKey:(NSString *)key {
-    if (!isSelf())
+    if (!isMainBundle())
         return %orig;
     if ([key isEqualToString:@"CFBundleIdentifier"])
         return YT_BUNDLE_ID;

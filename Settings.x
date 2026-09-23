@@ -278,6 +278,7 @@ static NSString *GetCacheSize() {
                 [self switchWithTitle:@"HideShortsComments" key:@"hideShortsComments"],
                 [self switchWithTitle:@"HideShortsRemix" key:@"hideShortsRemix"],
                 [self switchWithTitle:@"HideShortsShare" key:@"hideShortsShare"],
+                [self switchWithTitle:@"HideShortsActionBar" key:@"hideShortsActionBar"],
                 [self switchWithTitle:@"HideShortsAvatars" key:@"hideShortsAvatars"],
                 [self switchWithTitle:@"HideShortsThanks" key:@"hideShortsThanks"],
                 [self switchWithTitle:@"HideShortsSource" key:@"hideShortsSource"],
