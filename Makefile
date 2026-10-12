@@ -15,6 +15,14 @@ $(TWEAK_NAME)_FRAMEWORKS = UIKit Foundation SystemConfiguration
 $(TWEAK_NAME)_CFLAGS = -fobjc-arc -DTWEAK_VERSION=$(PACKAGE_VERSION)
 $(TWEAK_NAME)_FILES = $(wildcard *.x Utils/*.m)
 
+# Flag-crash diagnostics (Utils/YTLFlagDiag.m is always compiled -- the safety guards ship in
+# release; only the tracing/sweep driver is conditional). `make package FLAG_DEBUG=1` adds the
+# per-flag read trace, the sweep control file reader, and the uncaught-exception capture.
+# See tools/flagsweep.sh. Never ship a FLAG_DEBUG build.
+ifeq ($(FLAG_DEBUG),1)
+$(TWEAK_NAME)_CFLAGS += -DYTL_FLAG_DEBUG
+endif
+
 # The ELM reverse-engineering harness in re/ is NOT part of the shipping tweak -- it is opt-in
 # test tooling. `make package ELM_RE=1` compiles the tracer and defines YTL_ELM_RE; a normal
 # `make package` never touches it (the wildcard above is root-only, and re/ is excluded), so
