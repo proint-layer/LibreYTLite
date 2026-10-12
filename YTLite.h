@@ -3,13 +3,34 @@
 #import <Photos/Photos.h>
 #import "Utils/NSBundle+YTLite.h"
 #import "Utils/YTLUserDefaults.h"
+#import "Utils/YTLFlagDiag.h"
 #import "Utils/Reachability.h"
 #import "YouTubeHeaders.h"
 
 #define LOC(key) [NSBundle.ytl_defaultBundle localizedStringForKey:key value:nil table:nil]
 
+#if defined(YTL_FLAG_DEBUG)
+// Flag-diagnostics build: every settings read is traced (first read per key) and can be
+// overridden by the sweep control file, so the harness can isolate one flag at a time without
+// touching NSUserDefaults (cfprefsd would serve a stale cache). See Utils/YTLFlagDiag.h.
+static inline BOOL ytlBoolTraced(NSString *key) {
+    BOOL v;
+    if (!ytlSweepOverrideBool(key, &v)) v = [[YTLUserDefaults standardUserDefaults] boolForKey:key];
+    ytlTraceFlagRead(key, v, YES);
+    return v;
+}
+static inline NSInteger ytlIntTraced(NSString *key) {
+    NSInteger v;
+    if (!ytlSweepOverrideInt(key, &v)) v = [[YTLUserDefaults standardUserDefaults] integerForKey:key];
+    ytlTraceFlagRead(key, v, NO);
+    return v;
+}
+#define ytlBool(key) ytlBoolTraced(key)
+#define ytlInt(key) ytlIntTraced(key)
+#else
 #define ytlBool(key) [[YTLUserDefaults standardUserDefaults] boolForKey:key]
 #define ytlInt(key) [[YTLUserDefaults standardUserDefaults] integerForKey:key]
+#endif
 
 #define ytlSetBool(value, key) [[YTLUserDefaults standardUserDefaults] setBool:(value) forKey:(key)]
 #define ytlSetInt(value, key) [[YTLUserDefaults standardUserDefaults] setInteger:(value) forKey:(key)]
@@ -21,7 +42,7 @@
 // Any diagnostic/logging build (POST_DEBUG or the ELM_RE tracer) defines this. Used to add a
 // visible at-a-glance marker (home wordmark cropped to "You") so a device running a debug build
 // is instantly distinguishable from a clean release. Never defined in a normal build.
-#if defined(YTL_POST_DEBUG) || defined(YTL_ELM_RE)
+#if defined(YTL_POST_DEBUG) || defined(YTL_ELM_RE) || defined(YTL_FLAG_DEBUG)
 #define YTL_DEBUG_BUILD 1
 #endif
 
