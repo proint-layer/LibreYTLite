@@ -410,9 +410,9 @@ static NSMutableArray *ytlFilteredSections(NSArray *array) {
 // at the rendered-state level — safe for ASDK, operates on a copy not the raw proto model
 %hook YTInnerTubeCollectionViewController
 - (void)displaySectionsWithReloadingSectionControllerByRenderer:(id)renderer {
-    NSMutableArray *sectionRenderers = [self valueForKey:@"_sectionRenderers"];
+    NSMutableArray *sectionRenderers = ytlSafeValueForKey(self, @"_sectionRenderers", @"feedFilter", YTL_SITE);
     NSMutableArray *filtered = ytlFilteredSections(sectionRenderers);
-    if (filtered) [self setValue:filtered forKey:@"_sectionRenderers"];
+    if (filtered) ytlSafeSetValue(self, filtered, @"_sectionRenderers", @"feedFilter", YTL_SITE);
     %orig;
 }
 - (void)addSectionsFromArray:(NSArray *)array {
@@ -510,7 +510,7 @@ static NSMutableArray *ytlFilteredSections(NSArray *array) {
 - (void)viewDidLoad {
     %orig;
 
-    if (ytlBool(@"noVoiceSearchButton")) [self setValue:@(NO) forKey:@"_isVoiceSearchAllowed"];
+    if (ytlBool(@"noVoiceSearchButton")) ytlSafeSetValue(self, @(NO), @"_isVoiceSearchAllowed", @"noVoiceSearchButton", YTL_SITE);
 }
 
 - (void)setSuggestions:(id)arg1 { if (!ytlBool(@"noSearchHistory")) %orig; }
@@ -1325,7 +1325,7 @@ static BOOL ytlQueuePaddlesActive(void) {
 // Extra Speed Options
 %hook YTVarispeedSwitchControllerImpl
 - (void)setDelegate:(id)arg1 {
-    NSMutableArray *optionsCopy = [[self valueForKey:@"_options"] mutableCopy];
+    NSMutableArray *optionsCopy = [ytlSafeValueForKey(self, @"_options", @"extraSpeedOptions", YTL_SITE) mutableCopy];
     NSArray *speedOptions = @[@"2.5", @"3", @"3.5", @"4", @"5"];
 
     for (NSString *title in speedOptions) {
@@ -1334,7 +1334,7 @@ static BOOL ytlQueuePaddlesActive(void) {
         [optionsCopy addObject:option];
     }
 
-    if (ytlBool(@"extraSpeedOptions")) [self setValue:[optionsCopy copy] forKey:@"_options"];
+    if (ytlBool(@"extraSpeedOptions")) ytlSafeSetValue(self, [optionsCopy copy], @"_options", @"extraSpeedOptions", YTL_SITE);
 
     return %orig;
 }
@@ -1393,7 +1393,17 @@ static BOOL ytlQueuePaddlesActive(void) {
 void addEndTime(YTPlayerViewController *self, YTSingleVideoController *video, YTSingleVideoTime *time) {
     if (!ytlBool(@"videoEndTime")) return;
 
-    CGFloat rate = video.playbackRate != 0 ? video.playbackRate : 1.0;
+    // playbackRate/totalMediaTime are OUR forward declarations (see YTLite.h) -- they compile
+    // against every YouTube build but only EXIST on some. YT 21.36.x dropped playbackRate, and
+    // this runs on every playback tick, so an unguarded read aborted the app the moment a video
+    // started: -[... playbackRate]: unrecognized selector. A missing rate just means "assume 1x";
+    // without a duration there is no end time to show at all, so bail.
+    if (!ytlSafeResponds(video, @selector(totalMediaTime), @"videoEndTime", YTL_SITE)) return;
+
+    CGFloat rate = 1.0;
+    if (ytlSafeResponds(video, @selector(playbackRate), @"videoEndTime", YTL_SITE) && video.playbackRate != 0)
+        rate = video.playbackRate;
+
     NSTimeInterval remainingTime = (lround(video.totalMediaTime) - lround(time.time)) / rate;
 
     NSDate *estimatedEndTime = [NSDate dateWithTimeIntervalSinceNow:remainingTime];
@@ -1419,6 +1429,8 @@ void addEndTime(YTPlayerViewController *self, YTSingleVideoController *video, YT
 
 void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video, YTSingleVideoTime *time) {
     if (!ytlBool(@"autoSkipShorts")) return;
+
+    if (!ytlSafeResponds(video, @selector(totalMediaTime), @"autoSkipShorts", YTL_SITE)) return;
 
     if (floor(time.time) >= floor(video.totalMediaTime)) {
         if ([self.parentViewController isKindOfClass:%c(YTShortsPlayerViewController)]) {
@@ -1450,11 +1462,11 @@ void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video
     if (gYTLExpectingQueueLoad) { gYTLExpectingQueueLoad = NO; gYTLQueueEngaged = YES; }
     else gYTLQueueEngaged = NO;
 
-    if (ytlInt(@"wiFiQualityIndex") != 0 || ytlInt(@"cellQualityIndex") != 0) [self performSelector:@selector(autoQuality) withObject:nil afterDelay:1.0];
-    if (ytlBool(@"autoFullscreen")) [self performSelector:@selector(autoFullscreen) withObject:nil afterDelay:0.75];
-    if (ytlBool(@"shortsToRegular")) [self performSelector:@selector(shortsToRegular) withObject:nil afterDelay:0.75];
-    if (ytlInt(@"autoSpeedIndex") != 3) [self performSelector:@selector(setAutoSpeed) withObject:nil afterDelay:0.75];
-    if (ytlBool(@"disableAutoCaptions")) [self performSelector:@selector(turnOffCaptions) withObject:nil afterDelay:1.0];
+    if (ytlInt(@"wiFiQualityIndex") != 0 || ytlInt(@"cellQualityIndex") != 0) ytlSafePerform(self, @selector(autoQuality), 1.0, @"wiFiQualityIndex/cellQualityIndex", YTL_SITE);
+    if (ytlBool(@"autoFullscreen")) ytlSafePerform(self, @selector(autoFullscreen), 0.75, @"autoFullscreen", YTL_SITE);
+    if (ytlBool(@"shortsToRegular")) ytlSafePerform(self, @selector(shortsToRegular), 0.75, @"shortsToRegular", YTL_SITE);
+    if (ytlInt(@"autoSpeedIndex") != 3) ytlSafePerform(self, @selector(setAutoSpeed), 0.75, @"autoSpeedIndex", YTL_SITE);
+    if (ytlBool(@"disableAutoCaptions")) ytlSafePerform(self, @selector(turnOffCaptions), 1.0, @"disableAutoCaptions", YTL_SITE);
 }
 
 // This is what makes the queue a QUEUE: the player tells us a video finished, and
@@ -1475,7 +1487,7 @@ void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video
 
 %new
 - (void)autoFullscreen {
-    YTWatchController *watchController = [self valueForKey:@"_UIDelegate"];
+    YTWatchController *watchController = ytlSafeValueForKey(self, @"_UIDelegate", @"autoFullscreen", YTL_SITE);
     [watchController showFullScreen];
 }
 
@@ -1679,7 +1691,7 @@ void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video
 // Remove Download button from the menu
 %hook YTDefaultSheetController
 - (void)addAction:(YTActionSheetAction *)action {
-    NSString *identifier = [action valueForKey:@"_accessibilityIdentifier"];
+    NSString *identifier = ytlSafeValueForKey(action, @"_accessibilityIdentifier", @"menuRemoval", YTL_SITE);
 
     NSDictionary *actionsToRemove = @{
         @"7": @(ytlBool(@"removeDownloadMenu")),
@@ -1894,7 +1906,7 @@ static BOOL isOverlayShown = YES;
 
         UIWindow *mainWindow = [[[UIApplication sharedApplication] delegate] window];
         YTAppViewControllerImpl *appVC = (YTAppViewControllerImpl *)mainWindow.rootViewController;
-        [appVC performSelector:@selector(showPivotBar) withObject:nil afterDelay:1.0];
+        ytlSafePerform(appVC, @selector(showPivotBar), 1.0, @"shortsOnlyMode", YTL_SITE);
     }
 }
 %end
@@ -2128,7 +2140,7 @@ static void genImageFromLayer(CALayer *layer, UIColor *backgroundColor, void (^c
 - (void)setFrame:(CGRect)frame {
     %orig;
 
-    if (ytlBool(@"commentManager") && [[self valueForKey:@"_accessibilityIdentifier"] isEqualToString:@"id.comment.content.label"]) {
+    if (ytlBool(@"commentManager") && [ytlSafeValueForKey(self, @"_accessibilityIdentifier", @"commentManager", YTL_SITE) isEqualToString:@"id.comment.content.label"]) {
         if ([self isKindOfClass:NSClassFromString(@"ASTextNode")]) {
             ASTextNode *textNode = (ASTextNode *)self;
 
@@ -2172,7 +2184,7 @@ static void genImageFromLayer(CALayer *layer, UIColor *backgroundColor, void (^c
 
 %hook YTImageZoomNode
 - (BOOL)gestureRecognizer:(id)arg1 shouldRecognizeSimultaneouslyWithGestureRecognizer:(id)arg2 {
-    BOOL isImageLoaded = [[self valueForKey:@"_didLoadImage"] boolValue];
+    BOOL isImageLoaded = [ytlSafeValueForKey(self, @"_didLoadImage", @"postManager", YTL_SITE) boolValue];
     if (ytlBool(@"postManager") && isImageLoaded) {
         ASDisplayNode *displayNode = (ASDisplayNode *)self;
         ASNetworkImageNode *imageNode = (ASNetworkImageNode *)self;
@@ -3248,19 +3260,28 @@ CGFloat rateBeforeSpeedmaster = 1.0;
 static void manageSpeedmasterYTLite(UILongPressGestureRecognizer *gesture, YTMainAppVideoPlayerOverlayViewController *delegate, YTInlinePlayerScrubUserEducationView *edu) {
     NSArray *speedLabels = @[@0, @2.0, @0.25, @0.5, @0.75, @1.0, @1.25, @1.5, @1.75, @2.0, @3.0, @4.0, @5.0];
 
-    YTLabel *label = [edu valueForKey:@"_userEducationLabel"];
-    edu.labelType = 1;
-    [label setValue:[NSString stringWithFormat:@"%@: %@×", LOC(@"PlaybackSpeed"), speedLabels[ytlInt(@"speedIndex")]] forKey:@"text"];
+    // Every object below is reached through an interface WE declare (YTLite.h) on a private
+    // YouTube class, so each send compiles against any build and may be missing on this one.
+    // This runs from a UIGestureRecognizer target, so an unguarded miss aborts the app from the
+    // gesture machinery with nothing of ours obviously at fault in the report.
+    if (!ytlSafeResponds(delegate, @selector(setPlaybackRate:), @"speedIndex", YTL_SITE)) return;
+
+    YTLabel *label = ytlSafeValueForKey(edu, @"_userEducationLabel", @"speedIndex", YTL_SITE);
+    if (ytlSafeResponds(edu, @selector(setLabelType:), @"speedIndex", YTL_SITE)) edu.labelType = 1;
+    ytlSafeSetValue(label, [NSString stringWithFormat:@"%@: %@×", LOC(@"PlaybackSpeed"), speedLabels[ytlInt(@"speedIndex")]], @"text", @"speedIndex", YTL_SITE);
+
+    BOOL canToggleEdu = ytlSafeResponds(edu, @selector(setVisible:), @"speedIndex", YTL_SITE);
 
     if (gesture.state == UIGestureRecognizerStateBegan) {
-        rateBeforeSpeedmaster = delegate.currentPlaybackRate;
+        rateBeforeSpeedmaster = ytlSafeResponds(delegate, @selector(currentPlaybackRate), @"speedIndex", YTL_SITE)
+            ? delegate.currentPlaybackRate : 1.0;
         [delegate setPlaybackRate:[speedLabels[ytlInt(@"speedIndex")] floatValue]];
-        [edu setVisible:YES];
+        if (canToggleEdu) [edu setVisible:YES];
     }
 
     else if (gesture.state == UIGestureRecognizerStateEnded) {
         [delegate setPlaybackRate:rateBeforeSpeedmaster];
-        [edu setVisible:NO];
+        if (canToggleEdu) [edu setVisible:NO];
     }
 }
 
@@ -3275,7 +3296,9 @@ static void manageSpeedmasterYTLite(UILongPressGestureRecognizer *gesture, YTMai
 
 %new
 - (void)speedmasterYtLite:(UILongPressGestureRecognizer *)gesture {
-    YTInlinePlayerScrubUserEducationView *edu = self.scrubUserEducationView;
+    YTInlinePlayerScrubUserEducationView *edu =
+        ytlSafeResponds(self, @selector(scrubUserEducationView), @"speedIndex", YTL_SITE)
+            ? self.scrubUserEducationView : nil;
     manageSpeedmasterYTLite(gesture, self.delegate, edu);
 }
 %end
@@ -3285,8 +3308,12 @@ static void manageSpeedmasterYTLite(UILongPressGestureRecognizer *gesture, YTMai
     if (ytlInt(@"speedIndex") == 0) return;
     if (ytlInt(@"speedIndex") == 1) return %orig;
 
-    YTMainAppVideoPlayerOverlayViewController *delegate = [self valueForKey:@"_delegate"];
-    YTInlinePlayerScrubUserEducationView *edu = (YTInlinePlayerScrubUserEducationView *)delegate.videoPlayerOverlayView.scrubUserEducationView;
+    YTMainAppVideoPlayerOverlayViewController *delegate = ytlSafeValueForKey(self, @"_delegate", @"speedIndex", YTL_SITE);
+    id overlayView = ytlSafeResponds(delegate, @selector(videoPlayerOverlayView), @"speedIndex", YTL_SITE)
+        ? delegate.videoPlayerOverlayView : nil;
+    YTInlinePlayerScrubUserEducationView *edu =
+        ytlSafeResponds(overlayView, @selector(scrubUserEducationView), @"speedIndex", YTL_SITE)
+            ? (YTInlinePlayerScrubUserEducationView *)[overlayView scrubUserEducationView] : nil;
     manageSpeedmasterYTLite(gesture, delegate, edu);
 }
 %end
@@ -3555,6 +3582,13 @@ static NSURL *newCoverURL(NSURL *originalURL) {
 
 %ctor {
     YTLDBG(@"YTLite loaded (debug build)");
+
+#if defined(YTL_FLAG_DEBUG)
+    // Arm the flag-crash diagnostics BEFORE any hook runs: installs the uncaught-exception
+    // handler (so an NSUnknownKeyException records which flag-gated paths had run) and loads
+    // the sweep control file that lets the harness isolate one flag per launch.
+    ytlFlagDiagStart();
+#endif
 
     // PiP diagnostic: mark app background/foreground in the PiP log so the failure signature --
     // "APP -> background" with no following "didStart" -- is visible in the exported file.
