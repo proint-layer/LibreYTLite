@@ -45,6 +45,11 @@ BOOL ytlSafeSetValue(id _Nullable obj, id _Nullable value, NSString *key,
                      NSString *flag, const char *site);
 
 #if defined(YTL_FLAG_DEBUG)
+// Free-form note into the same on-device report the guards write to. Use YTL_NOTE at a decision
+// point whose outcome you need to read back LATER and UNTETHERED -- unlike YTLDBG (os_log), this
+// survives in Documents/YTLFlagDiag.log and comes back with `tools/flagsweep.sh pull`.
+void ytlDiagNote(NSString *msg);
+
 // Records that `key` was read (first read per key is logged with its value).
 void ytlTraceFlagRead(NSString *key, NSInteger value, BOOL isBool);
 // Installs the uncaught-exception handler and writes the run header. Idempotent.
@@ -53,6 +58,12 @@ void ytlFlagDiagStart(void);
 // Returns YES and fills *out when the override applies to `key`.
 BOOL ytlSweepOverrideBool(NSString *key, BOOL *out);
 BOOL ytlSweepOverrideInt(NSString *key, NSInteger *out);
+#endif
+
+#if defined(YTL_FLAG_DEBUG)
+#define YTL_NOTE(fmt, ...) ytlDiagNote([NSString stringWithFormat:(fmt), ##__VA_ARGS__])
+#else
+#define YTL_NOTE(fmt, ...) ((void)0)
 #endif
 
 NS_ASSUME_NONNULL_END

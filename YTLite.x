@@ -87,13 +87,49 @@ static NSArray<NSString *> *ytlImageGroupContaining(NSString *normURL) {
     return nil;
 }
 
+#if defined(YTL_FLAG_DEBUG)
+// Dump RAW image-URL candidates from element bytes with NO filter. When the filter stops matching
+// the cache silently empties and the gallery degrades to a single image with no error anywhere --
+// this is how we read back the shape the URLs ACTUALLY have now, instead of guessing.
+static void ytlDumpRawImageURLs(NSString *s) {
+    static int dumps = 0;
+    if (dumps >= 4) return;
+    NSScanner *sc = [NSScanner scannerWithString:s];
+    sc.charactersToBeSkipped = nil;
+    NSCharacterSet *stops = [NSCharacterSet characterSetWithCharactersInString:@" \t\n\r\f\"'<>(){}[]\\|,;"];
+    NSMutableArray<NSString *> *cands = [NSMutableArray array];
+    while (![sc isAtEnd] && cands.count < 8) {
+        if (![sc scanUpToString:@"https://" intoString:NULL]) break;
+        NSString *c = nil;
+        if (![sc scanUpToCharactersFromSet:stops intoString:&c] || c.length == 0) continue;
+        if (![c containsString:@"ggpht.com"] && ![c containsString:@"googleusercontent.com"]) continue;
+        [cands addObject:(c.length > 130 ? [c substringToIndex:130] : c)];
+    }
+    if (cands.count >= 2) {
+        dumps++;
+        YTL_NOTE(@"POSTRAW n=%lu | %@", (unsigned long)cands.count, [cands componentsJoinedByString:@"  ||  "]);
+    }
+}
+#endif
+
 // Scans a feed elementRenderer's raw EML bytes for a multi-image post's image URLs and
 // caches the group. Cheap-gated on the "fcrop64" crop marker so most renderers are skipped.
 static void ytlScanAndCacheImages(NSData *data) {
     if (data.length == 0 || data.length > 600000) return;
     static NSData *marker; static dispatch_once_t once;
     dispatch_once(&once, ^{ marker = [@"fcrop64" dataUsingEncoding:NSASCIIStringEncoding]; });
-    if ([data rangeOfData:marker options:0 range:NSMakeRange(0, data.length)].location == NSNotFound) return;
+    BOOL hasMarker = [data rangeOfData:marker options:0 range:NSMakeRange(0, data.length)].location != NSNotFound;
+#if defined(YTL_FLAG_DEBUG)
+    if (!hasMarker) {
+        static NSData *ggpht; static dispatch_once_t once2;
+        dispatch_once(&once2, ^{ ggpht = [@"ggpht.com" dataUsingEncoding:NSASCIIStringEncoding]; });
+        if ([data rangeOfData:ggpht options:0 range:NSMakeRange(0, data.length)].location != NSNotFound) {
+            NSString *raw = [[NSString alloc] initWithData:data encoding:NSISOLatin1StringEncoding];
+            if (raw) ytlDumpRawImageURLs(raw);
+        }
+    }
+#endif
+    if (!hasMarker) return;
     NSString *s = [[NSString alloc] initWithData:data encoding:NSISOLatin1StringEncoding]; // lossless byte->char
     if (!s) return;
     NSMutableArray<NSURL *> *found = [NSMutableArray array];
@@ -101,6 +137,12 @@ static void ytlScanAndCacheImages(NSData *data) {
     if (found.count >= 2) {
         ytlRecordImageGroup(found);
         YTLDBG(@"cached image group: %lu", (unsigned long)found.count);
+        YTL_NOTE(@"POSTSCAN cached group of %lu | first=%@", (unsigned long)found.count,
+                 ytMaxResURLString(found.firstObject.absoluteString));
+    } else if (found.count == 1) {
+        // The bytes carried the crop marker but only ONE image URL -- i.e. the element no longer
+        // holds the whole set. Distinguishes "scan broke" from "lookup key mismatched".
+        YTL_NOTE(@"POSTSCAN only 1 url | %@", ytMaxResURLString(found.firstObject.absoluteString));
     }
 }
 
@@ -2791,6 +2833,8 @@ static void ytlPresentGallery(NSURL *tapped, UIViewController *host) {
     NSInteger idx = 0;
 
     NSArray<NSString *> *group = ytlImageGroupContaining(tappedNorm);
+    YTL_NOTE(@"POSTTAP group=%lu cached=%lu | tapped=%@", (unsigned long)group.count,
+             (unsigned long)gYTLImageGroups.count, tappedNorm);
     if (group.count >= 2) {
         for (NSString *g in group) { NSURL *u = [NSURL URLWithString:g]; if (u) [all addObject:u]; }
         NSInteger gi = [group indexOfObject:tappedNorm];
