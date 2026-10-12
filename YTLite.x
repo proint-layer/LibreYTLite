@@ -60,6 +60,28 @@ static UIImage *ytlMenuIcon(NSArray<NSString *> *names, NSString *sfFallback) {
 static NSString *ytMaxResURLString(NSString *urlString);
 static void ytlAddPhotoURLsFromString(NSString *s, NSMutableArray<NSURL *> *out);
 
+// Is this image URL a community-post ATTACHMENT (as opposed to an author avatar or a badge)?
+//
+// Through 21.31.x every post attachment carried "fcrop64" and nothing else did, so the whole
+// feature keyed off that one substring. 21.36.x dropped it: attachments now arrive as
+// "…=s1024-rw-nd-v1". The filter silently matched nothing, the feed-time cache stayed empty, and
+// multi-image posts degraded to a single image with no error anywhere -- the gallery just falls
+// back to the tapped image when no group is found.
+//
+// So match on what actually separates the two, and keep accepting the legacy form (some surfaces
+// still emit it):
+//   - avatars/badges are circular-cropped thumbnails ("-c-k-c0x…") at small sizes (=s48/s88/s176)
+//   - attachments come through at a large explicit size (=s1024 today)
+static BOOL ytlIsPostImageURLString(NSString *c) {
+    if (!c.length) return NO;
+    if ([c containsString:@"fcrop64"]) return YES;   // legacy form, <= 21.31.x
+    if ([c containsString:@"-c-k-c0x"]) return NO;   // circular crop == avatar/badge
+    NSRange r = [c rangeOfString:@"=s"];
+    if (r.location == NSNotFound) return NO;
+    // "1024-rw-nd-v1" -> 1024, "88-c-k-…" -> 88. Well clear of any avatar size.
+    return [[c substringFromIndex:NSMaxRange(r)] integerValue] >= 300;
+}
+
 static NSMutableArray<NSArray<NSString *> *> *gYTLImageGroups;   // each: ordered =s0 URLs
 static NSObject *gYTLImageGroupsLock;
 
@@ -88,9 +110,10 @@ static NSArray<NSString *> *ytlImageGroupContaining(NSString *normURL) {
 }
 
 #if defined(YTL_FLAG_DEBUG)
-// Dump RAW image-URL candidates from element bytes with NO filter. When the filter stops matching
-// the cache silently empties and the gallery degrades to a single image with no error anywhere --
-// this is how we read back the shape the URLs ACTUALLY have now, instead of guessing.
+// Dump RAW image-URL candidates from element bytes with NO fcrop64 filter. When the filter stops
+// matching (as it did on 21.36.6) the cache silently empties and the gallery degrades to a single
+// image with no error anywhere -- this is how we read back the shape the URLs ACTUALLY have now,
+// instead of guessing a new discriminator.
 static void ytlDumpRawImageURLs(NSString *s) {
     static int dumps = 0;
     if (dumps >= 4) return;
@@ -105,6 +128,7 @@ static void ytlDumpRawImageURLs(NSString *s) {
         if (![c containsString:@"ggpht.com"] && ![c containsString:@"googleusercontent.com"]) continue;
         [cands addObject:(c.length > 130 ? [c substringToIndex:130] : c)];
     }
+    // >=2 means this element plausibly IS a multi-image post -- the case we care about.
     if (cands.count >= 2) {
         dumps++;
         YTL_NOTE(@"POSTRAW n=%lu | %@", (unsigned long)cands.count, [cands componentsJoinedByString:@"  ||  "]);
@@ -116,9 +140,15 @@ static void ytlDumpRawImageURLs(NSString *s) {
 // caches the group. Cheap-gated on the "fcrop64" crop marker so most renderers are skipped.
 static void ytlScanAndCacheImages(NSData *data) {
     if (data.length == 0 || data.length > 600000) return;
-    static NSData *marker; static dispatch_once_t once;
-    dispatch_once(&once, ^{ marker = [@"fcrop64" dataUsingEncoding:NSASCIIStringEncoding]; });
-    BOOL hasMarker = [data rangeOfData:marker options:0 range:NSMakeRange(0, data.length)].location != NSNotFound;
+    // Cheap pre-filter so most elements never get converted to a string. Two markers: the legacy
+    // crop param, and the resize suffix the 21.36.x attachment URLs carry.
+    static NSData *marker, *marker2; static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        marker  = [@"fcrop64" dataUsingEncoding:NSASCIIStringEncoding];
+        marker2 = [@"-rw-nd"  dataUsingEncoding:NSASCIIStringEncoding];
+    });
+    BOOL hasMarker = [data rangeOfData:marker options:0 range:NSMakeRange(0, data.length)].location != NSNotFound
+                  || [data rangeOfData:marker2 options:0 range:NSMakeRange(0, data.length)].location != NSNotFound;
 #if defined(YTL_FLAG_DEBUG)
     if (!hasMarker) {
         static NSData *ggpht; static dispatch_once_t once2;
@@ -2813,7 +2843,7 @@ static void ytlAddPhotoURLsFromString(NSString *s, NSMutableArray<NSURL *> *out)
         NSString *candidate = nil;
         if (![sc scanUpToCharactersFromSet:stops intoString:&candidate] || candidate.length == 0) continue;
         if (![candidate containsString:@"ggpht.com"] && ![candidate containsString:@"googleusercontent.com"]) continue;
-        if (![candidate containsString:@"fcrop64"]) continue; // exclude avatars/badges
+        if (!ytlIsPostImageURLString(candidate)) continue; // exclude avatars/badges
         if (out.count >= 30) break;
         NSString *norm = ytMaxResURLString(candidate);
         BOOL dup = NO;
@@ -2882,13 +2912,15 @@ static id ytlPostContainerForAnchorView(UIView *view) {
     return nil;
 }
 
-// First ATTACHED post image in the subtree. Post attachments carry "fcrop64" in the URL; author
-// avatars / badges don't — so this filters to the real image without a finger location (the ⋯
-// button isn't on an image). ytlPresentGallery then pages the full cached group from that URL.
+// First ATTACHED post image in the subtree — filters out author avatars / badges without needing
+// a finger location (the ⋯ button isn't on an image). ytlPresentGallery then pages the full
+// cached group from that URL. Shares ytlIsPostImageURLString with the feed-time scan so both
+// paths agree on what an attachment looks like; hard-coding "fcrop64" here broke the ⋯ menu's
+// "Open Image" on 21.36.x the same way it broke the cache.
 static NSURL *ytlPostImageURLInNode(ASDisplayNode *node, int depth) {
     if (!node || depth > 12) return nil;
     NSURL *own = nodeImageURL(node);
-    if (own && [own.absoluteString containsString:@"fcrop64"]) return own;
+    if (own && ytlIsPostImageURLString(own.absoluteString)) return own;
     for (ASDisplayNode *child in node.yogaChildren) { NSURL *u = ytlPostImageURLInNode(child, depth + 1); if (u) return u; }
     if ([node respondsToSelector:@selector(subnodes)]) {
         for (ASDisplayNode *child in [node valueForKey:@"subnodes"]) { NSURL *u = ytlPostImageURLInNode(child, depth + 1); if (u) return u; }
