@@ -222,6 +222,13 @@ BOOL ytlSweepOverrideInt(NSString *key, NSInteger *out) {
     return YES;
 }
 
+void ytlDiagNote(NSString *msg) {
+    // Not deduped: these are decision-point traces where the SEQUENCE and the repeat count are
+    // the signal (e.g. "scan cached N groups" then "gallery resolved 1 image").
+    os_log(ytlDiagLog(), "[YTLITE] %{public}@", msg);
+    ytlDiagAppend(msg);
+}
+
 void ytlTraceFlagRead(NSString *key, NSInteger value, BOOL isBool) {
     // First read of each key only -- this fires from scroll-rate code paths.
     NSString *line = isBool
