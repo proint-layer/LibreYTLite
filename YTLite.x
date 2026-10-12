@@ -1341,26 +1341,23 @@ static BOOL ytlQueuePaddlesActive(void) {
 %end
 
 // Temprorary Fix For 'Classic Video Quality' and 'Extra Speed Options'
-%hook YTVersionUtils
-+ (NSString *)appVersion {
-    NSString *originalVersion = %orig;
-    NSString *fakeVersion = @"18.18.2";
-
-    return (!ytlBool(@"classicQuality") && !ytlBool(@"extraSpeedOptions") && [originalVersion compare:fakeVersion options:NSNumericSearch] == NSOrderedDescending) ? originalVersion : fakeVersion;
-}
-%end
-
-// Show real version in YT Settings
-%hook YTSettingsCell
-- (void)setDetailText:(id)arg1 {
-    NSDictionary *infoDictionary = [[NSBundle mainBundle] infoDictionary];
-    NSString *appVersion = infoDictionary[@"CFBundleShortVersionString"];
-
-    if ([arg1 isEqualToString:@"18.18.2"]) {
-        arg1 = appVersion;
-    } %orig(arg1);
-}
-%end
+// REMOVED: the YTVersionUtils +appVersion spoof (reported "18.18.2" whenever `classicQuality`
+// or `extraSpeedOptions` was on), plus the YTSettingsCell hook that existed only to hide the fake
+// string again in Settings.
+//
+// That spoof SOFT-BRICKED THE APP. The version it returns feeds the InnerTube client context, so
+// the server saw an 18.18.2 client and answered with the upgrade killswitch -- "Update available"
+// for classicQuality, a modal "Update Required / You must update to continue" for
+// extraSpeedOptions. No feed, no playback, and no way back from inside the app (the modal only
+// offers Quit), so recovering meant a reinstall.
+//
+// It was also redundant by this point: both features are implemented directly and check nothing
+// about the version -- classicQuality constructs YTVideoQualitySwitchOriginalController itself in
+// the YTVideoQualitySwitchControllerFactoryImpl hook above, and extraSpeedOptions appends to
+// `_options` in the YTVarispeedSwitchControllerImpl hook. The spoof was a leftover from when the
+// old quality sheet was selected by version alone.
+//
+// Lesson: never spoof a value YouTube sends to the server to unlock a CLIENT-side code path.
 
 // Disable Snap To Chapter (https://github.com/qnblackcat/uYouPlus/blob/main/uYouPlus.xm#L457-464)
 // YT 21.x moved the player bar to YTModularPlayerBarController; instead of the old
