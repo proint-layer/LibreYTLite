@@ -8,7 +8,9 @@ Fork this repo and trigger the **Build YTLite IPA** workflow from the Actions ta
 
 ## Compatibility
 
-Verified against **YouTube 21.25.5** and **21.31.3**. LibreYTLite tracks a rolling window of recent major YouTube versions: when a new major version lands, the hooks are audited against it and any renamed classes/selectors are dual-hooked so earlier versions keep working (e.g. `MLPIPController` → `MLPIPControllerImpl` in 21.31.x). Versions outside the tested window may still work but aren't verified — prefer a YouTube IPA from the tested set.
+Verified against **YouTube 21.25.5**, **21.31.3** and **21.36.6**. LibreYTLite tracks a rolling window of recent major YouTube versions: when a new major version lands, the hooks are audited against it and any renamed classes/selectors are dual-hooked so earlier versions keep working (e.g. `MLPIPController` → `MLPIPControllerImpl` in 21.31.x, `YTReelPlayerButton` → `YTReelPlayerPivotButton` in 21.36.x). Versions outside the tested window may still work but aren't verified — prefer a YouTube IPA from the tested set.
+
+**Known gaps on 21.36.x:** the Shorts *header* toggles no longer apply (that region moved to ELM element renderers), and the Shorts *action bar* toggles are inactive on all 21.x. Everything else is verified working.
 
 ## Features
 
