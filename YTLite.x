@@ -59,6 +59,7 @@ static UIImage *ytlMenuIcon(NSArray<NSString *> *names, NSString *sfFallback) {
 // full list is ever sitting in one piece.
 static NSString *ytMaxResURLString(NSString *urlString);
 static void ytlAddPhotoURLsFromString(NSString *s, NSMutableArray<NSURL *> *out);
+static void ytlRecordImageGroupsSplitByPost(NSString *s, NSArray<NSURL *> *found);
 
 // Is this image URL a community-post ATTACHMENT (as opposed to an author avatar or a badge)?
 //
@@ -222,7 +223,7 @@ static void ytlScanAndCacheImages(NSData *data) {
     }
 #endif
     if (found.count >= 2) {
-        ytlRecordImageGroup(found);
+        ytlRecordImageGroupsSplitByPost(s, found);
         YTLDBG(@"cached image group: %lu", (unsigned long)found.count);
         YTL_NOTE(@"POSTSCAN cached group of %lu | first=%@", (unsigned long)found.count,
                  ytMaxResURLString(found.firstObject.absoluteString));
@@ -2927,6 +2928,67 @@ static NSURL *ytlImageURLForView(UIView *rootView, CGPoint point) {
 // avatars/emoji/badges. NB 21.36.x dropped the old "fcrop64" directive -- do not re-hardcode it.
 // This reads the post's model text, so it finds ALL images even ones not yet realized in
 // the lazily-loaded carousel.
+// Community-post ids ("Ugk…", base64-ish) are the per-post boundary inside an element's bytes.
+// Needed because ONE element can carry several posts: a channel-home posts shelf
+// (post_shelf_slim.eml-fe) packs ~6 posts' thumbnails together, and treating that as one group
+// made tapping any image page all of them. A real single post (images_post_root_slim.eml-fe)
+// carries exactly one id, repeated once per image -- so each image sits beside its owner.
+static NSString *ytlPostIDNearestBefore(NSString *s, NSUInteger loc) {
+    static NSCharacterSet *idChars;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSMutableCharacterSet *m = [NSMutableCharacterSet alphanumericCharacterSet];
+        [m addCharactersInString:@"-_"];
+        idChars = [m copy];
+    });
+    NSRange search = NSMakeRange(0, loc);
+    NSString *best = nil;
+    while (search.length) {
+        NSRange r = [s rangeOfString:@"Ugk" options:NSBackwardsSearch range:search];
+        if (r.location == NSNotFound) break;
+        NSUInteger end = r.location;
+        while (end < loc && [idChars characterIsMember:[s characterAtIndex:end]]) end++;
+        NSUInteger len = end - r.location;
+        if (len >= 20) { best = [s substringWithRange:NSMakeRange(r.location, len)]; break; }
+        search = NSMakeRange(0, r.location);   // too short to be an id; keep looking back
+    }
+    return best;
+}
+
+// Record what we scraped as one group PER POST rather than one group per element.
+static void ytlRecordImageGroupsSplitByPost(NSString *s, NSArray<NSURL *> *found) {
+    NSMutableDictionary<NSString *, NSMutableArray<NSURL *> *> *byPost = [NSMutableDictionary dictionary];
+    NSMutableArray<NSURL *> *unowned = [NSMutableArray array];
+
+    for (NSURL *u in found) {
+        // `found` holds =s0-normalised URLs; the part before the first '=' is the stable id we
+        // can locate back in the raw bytes.
+        NSString *key = [[u.absoluteString componentsSeparatedByString:@"="] firstObject];
+        NSRange at = key.length ? [s rangeOfString:key] : NSMakeRange(NSNotFound, 0);
+        NSString *pid = (at.location == NSNotFound) ? nil : ytlPostIDNearestBefore(s, at.location);
+        if (!pid) { [unowned addObject:u]; continue; }
+        NSMutableArray<NSURL *> *g = byPost[pid];
+        if (!g) { g = [NSMutableArray array]; byPost[pid] = g; }
+        [g addObject:u];
+    }
+
+    for (NSArray<NSURL *> *g in byPost.allValues)
+        if (g.count >= 2) ytlRecordImageGroup(g);
+
+    // No post id anywhere: an older/other layout. Fall back to the previous all-in-one behaviour
+    // so we do not regress those, but only when nothing was attributable -- a MIX means the ids
+    // are present and the leftovers genuinely belong to no post.
+    if (byPost.count == 0 && unowned.count >= 2) {
+        YTL_NOTE(@"POSTSPLIT fallback: no post id found, grouping %lu as one",
+                 (unsigned long)unowned.count);
+        ytlRecordImageGroup(unowned);
+    } else if (byPost.count) {
+        YTL_NOTE(@"POSTSPLIT split %lu imgs into %lu post(s)%@",
+                 (unsigned long)found.count, (unsigned long)byPost.count,
+                 unowned.count ? [NSString stringWithFormat:@" (+%lu unowned)", (unsigned long)unowned.count] : @"");
+    }
+}
+
 static void ytlAddPhotoURLsFromString(NSString *s, NSMutableArray<NSURL *> *out) {
     if (s.length == 0) return;
     NSScanner *sc = [NSScanner scannerWithString:s];
@@ -3046,7 +3108,7 @@ static NSURL *ytlPostImageURLFromEntry(id entry) {
     if (!ytlStringHasPostImageMarker(s)) return nil;                  // fast reject: videos / text-only posts
     NSMutableArray<NSURL *> *found = [NSMutableArray array];
     ytlAddPhotoURLsFromString(s, found);
-    if (found.count >= 2) ytlRecordImageGroup(found);
+    if (found.count >= 2) ytlRecordImageGroupsSplitByPost(s, found);
     return found.firstObject;
 }
 
