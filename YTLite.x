@@ -79,6 +79,15 @@ static void ytlAddPhotoURLsFromString(NSString *s, NSMutableArray<NSURL *> *out)
 #define YTL_POST_IMAGE_MARKER_LEGACY  @"fcrop64"   // <= 21.31.x
 #define YTL_POST_IMAGE_MARKER_CURRENT @"-rw-nd"    // 21.36.x, e.g. "=s1024-rw-nd-v1"
 
+// Settings store a raw index; the arrays it indexes live in a different file (Settings.x builds
+// the picker rows, YTLite.x reads them). Add an option on one side only, or let a user's stored
+// index outlive a list edit, and the read goes out of bounds. Clamp every such read.
+static NSInteger ytlClampIndex(NSInteger idx, NSUInteger count) {
+    if (count == 0) return 0;
+    if (idx < 0) return 0;
+    return idx >= (NSInteger)count ? (NSInteger)count - 1 : idx;
+}
+
 static BOOL ytlStringHasPostImageMarker(NSString *s) {
     return s.length
         && ([s containsString:YTL_POST_IMAGE_MARKER_LEGACY]
@@ -1600,7 +1609,7 @@ void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video
         YTMainAppVideoPlayerOverlayViewController *overlayVC = (YTMainAppVideoPlayerOverlayViewController *)self.activeVideoPlayerOverlay;
 
         NSArray *speedLabels = @[@0.25, @0.5, @0.75, @1.0, @1.25, @1.5, @1.75, @2.0, @3.0, @4.0, @5.0];
-        [overlayVC setPlaybackRate:[speedLabels[ytlInt(@"autoSpeedIndex")] floatValue]];
+        [overlayVC setPlaybackRate:[speedLabels[ytlClampIndex(ytlInt(@"autoSpeedIndex"), speedLabels.count)] floatValue]];
     }
 }
 
@@ -1613,7 +1622,7 @@ void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video
     NetworkStatus status = [[Reachability reachabilityForInternetConnection] currentReachabilityStatus];
     NSInteger kQualityIndex = status == ReachableViaWiFi ? ytlInt(@"wiFiQualityIndex") : ytlInt(@"cellQualityIndex");
 
-    NSString *bestQualityLabel;
+    NSString *bestQualityLabel = nil;
     int highestResolution = 0;
     for (MLFormat *format in self.activeVideo.selectableVideoFormats) {
         int reso = format.singleDimensionResolution;
@@ -1623,8 +1632,15 @@ void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video
         }
     }
 
+    // No formats yet -> bestQualityLabel is nil, and a nil in an @[] literal throws
+    // NSInvalidArgumentException. This runs from a delayed perform a second after playback
+    // starts, so the abort lands with none of our frames on the stack and reads as "the quality
+    // toggle crashes the app". Empty selectableVideoFormats is normal: audio-only, DRM, or the
+    // player simply not populated yet. There is nothing to constrain in that case -- bail.
+    if (!bestQualityLabel) return;
+
     NSArray *qualityLabels = @[@"Default", bestQualityLabel, @"2160p60", @"2160p", @"1440p60", @"1440p", @"1080p60", @"1080p", @"720p60", @"720p", @"480p", @"360p"];
-    NSString *qualityLabel = qualityLabels[kQualityIndex];
+    NSString *qualityLabel = qualityLabels[ytlClampIndex(kQualityIndex, qualityLabels.count)];
 
     if (![qualityLabel isEqualToString:bestQualityLabel]) {
         BOOL exactMatch = NO;
@@ -3253,7 +3269,7 @@ BOOL isTabSelected = NO;
 
     if (!isTabSelected && !ytlBool(@"shortsOnlyMode")) {
         NSArray *pivotIdentifiers = @[@"FEwhat_to_watch", @"FEexplore", @"FEshorts", @"FEsubscriptions", @"FElibrary"];
-        [self selectItemWithPivotIdentifier:pivotIdentifiers[ytlInt(@"pivotIndex")]];
+        [self selectItemWithPivotIdentifier:pivotIdentifiers[ytlClampIndex(ytlInt(@"pivotIndex"), pivotIdentifiers.count)]];
         isTabSelected = YES;
     }
 
@@ -3358,14 +3374,14 @@ static void manageSpeedmasterYTLite(UILongPressGestureRecognizer *gesture, YTMai
 
     YTLabel *label = ytlSafeValueForKey(edu, @"_userEducationLabel", @"speedIndex", YTL_SITE);
     if (ytlSafeResponds(edu, @selector(setLabelType:), @"speedIndex", YTL_SITE)) edu.labelType = 1;
-    ytlSafeSetValue(label, [NSString stringWithFormat:@"%@: %@×", LOC(@"PlaybackSpeed"), speedLabels[ytlInt(@"speedIndex")]], @"text", @"speedIndex", YTL_SITE);
+    ytlSafeSetValue(label, [NSString stringWithFormat:@"%@: %@×", LOC(@"PlaybackSpeed"), speedLabels[ytlClampIndex(ytlInt(@"speedIndex"), speedLabels.count)]], @"text", @"speedIndex", YTL_SITE);
 
     BOOL canToggleEdu = ytlSafeResponds(edu, @selector(setVisible:), @"speedIndex", YTL_SITE);
 
     if (gesture.state == UIGestureRecognizerStateBegan) {
         rateBeforeSpeedmaster = ytlSafeResponds(delegate, @selector(currentPlaybackRate), @"speedIndex", YTL_SITE)
             ? delegate.currentPlaybackRate : 1.0;
-        [delegate setPlaybackRate:[speedLabels[ytlInt(@"speedIndex")] floatValue]];
+        [delegate setPlaybackRate:[speedLabels[ytlClampIndex(ytlInt(@"speedIndex"), speedLabels.count)] floatValue]];
         if (canToggleEdu) [edu setVisible:YES];
     }
 
