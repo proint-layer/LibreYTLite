@@ -186,6 +186,27 @@ static void ytlScanAndCacheImages(NSData *data) {
     if (!s) return;
     NSMutableArray<NSURL *> *found = [NSMutableArray array];
     ytlAddPhotoURLsFromString(s, found);
+#if defined(YTL_FLAG_DEBUG)
+    // A "group" far larger than any single post means this element spans SEVERAL posts (seen on a
+    // channel's Posts tab: one element, 16 images, so tapping any one of them paged all 16). To
+    // split them we need to know what delimits a post inside the bytes -- so dump the run of bytes
+    // immediately BEFORE each URL and look for a repeating boundary (a post id, a renderer name).
+    if (found.count >= 8) {
+        NSMutableArray<NSString *> *ctx = [NSMutableArray array];
+        for (NSURL *u in found) {
+            NSString *abs = u.absoluteString;
+            // the raw candidate still carries its size suffix; match on the stable id part
+            NSString *key = [[abs componentsSeparatedByString:@"="] firstObject];
+            NSRange at = key.length ? [s rangeOfString:key] : NSMakeRange(NSNotFound, 0);
+            if (at.location == NSNotFound || at.location < 48) continue;
+            NSString *before = [s substringWithRange:NSMakeRange(at.location - 48, 48)];
+            [ctx addObject:[before stringByReplacingOccurrencesOfString:@"\n" withString:@" "]];
+            if (ctx.count >= 6) break;
+        }
+        YTL_NOTE(@"POSTSPLIT n=%lu ctx=%@", (unsigned long)found.count,
+                 [ctx componentsJoinedByString:@"  ||  "]);
+    }
+#endif
     if (found.count >= 2) {
         ytlRecordImageGroup(found);
         YTLDBG(@"cached image group: %lu", (unsigned long)found.count);
@@ -859,10 +880,24 @@ static __weak YTPlayerViewController *gYTLPlayer;
 - (BOOL)queueClientGlobalConfigEnableFloatingPlaylistMinibar { return ytlBool(@"playlistOldMinibar") ? NO : %orig; }
 // Stop the FEED rotating with the device. YouTube turned this on server-side at some point --
 // the name is literal, rotation "everywhere" rather than only in the player -- so tilting the
-// phone on the home feed now flips it to landscape where it used to stay put. Returning NO puts
-// that back without touching the player: fullscreen landscape playback is driven by
-// -allowedFullScreenOrientations (see YTWatchViewController below, and the portraitFullscreen
-// toggle), not by this flag. Default OFF, so nothing changes until the user asks for it.
+// phone on the home feed now flips it to landscape where it used to stay put.
+//
+// TRAP: the flag is NOT a bare selector on YTColdConfig. YouTube namespaces cold-config getters
+// by sub-config, so the string "iosEnableRotationEverywhere" appears in the binary but belongs to
+// YTColdConfigUiSystemsClientGlobalConfig(Impl); YTColdConfig exposes it as
+// -uiSystemsClientGlobalConfigIosEnableRotationEverywhere. Hooking the bare name here compiled,
+// installed, and did exactly nothing. Verified with `ipsw class-dump`:
+//   -[YTColdConfig                                uiSystemsClientGlobalConfigIosEnableRotationEverywhere]
+//   -[YTColdConfigUiSystemsClientGlobalConfigImpl iosEnableRotationEverywhere]
+// Hook BOTH: callers reach the value either through the aggregate config or the sub-config object.
+//
+// Fullscreen playback is unaffected -- it goes through -allowedFullScreenOrientations (and
+// YTWatchView's own isFullScreenAmbientModeActiveForRotationEverywhere), not this flag.
+// Default OFF, so nothing changes until the user asks for it.
+- (BOOL)uiSystemsClientGlobalConfigIosEnableRotationEverywhere { return ytlBool(@"noFeedRotation") ? NO : %orig; }
+%end
+
+%hook YTColdConfigUiSystemsClientGlobalConfigImpl
 - (BOOL)iosEnableRotationEverywhere { return ytlBool(@"noFeedRotation") ? NO : %orig; }
 %end
 
