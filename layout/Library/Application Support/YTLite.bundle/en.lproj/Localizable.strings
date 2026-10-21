@@ -78,6 +78,8 @@
 "TapToPlay" = "Tap to play";
 "PortraitFullscreen" = "Portrait fullscreen mode";
 "PortraitFullscreenDesc" = "Enables portrait fullscreen mode support.";
+"NoFeedRotation" = "Lock feed to portrait";
+"NoFeedRotationDesc" = "Stops the feed and other non-player screens rotating when you tilt the device. Fullscreen video still rotates.";
 "CopyWithTimestamp" = "Copy timestamped links";
 "CopyWithTimestampDesc" = "Allows to copy timestamped link to the clipboard by pressing pause button.";
 "DisableAutoplay" = "Disable autoplay videos";

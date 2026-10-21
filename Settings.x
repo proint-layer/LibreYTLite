@@ -227,6 +227,7 @@ static NSString *GetCacheSize() {
                 [self switchWithTitle:@"EnableQueue" key:@"enableQueue"],
                 [self switchWithTitle:@"QueuePaddles" key:@"queuePaddles"],
                 [self switchWithTitle:@"PortraitFullscreen" key:@"portraitFullscreen"],
+                [self switchWithTitle:@"NoFeedRotation" key:@"noFeedRotation"],
                 [self switchWithTitle:@"CopyWithTimestamp" key:@"copyWithTimestamp"],
                 [self switchWithTitle:@"DisableAutoplay" key:@"disableAutoplay"],
                 [self switchWithTitle:@"DisableAutoCaptions" key:@"disableAutoCaptions"],
