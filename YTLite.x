@@ -857,6 +857,13 @@ static __weak YTPlayerViewController *gYTLPlayer;
 - (BOOL)enableSwipeToRemoveInPlaylistWatchEp { return YES; }
 // Enable Old-style Minibar For Playlist Panel
 - (BOOL)queueClientGlobalConfigEnableFloatingPlaylistMinibar { return ytlBool(@"playlistOldMinibar") ? NO : %orig; }
+// Stop the FEED rotating with the device. YouTube turned this on server-side at some point --
+// the name is literal, rotation "everywhere" rather than only in the player -- so tilting the
+// phone on the home feed now flips it to landscape where it used to stay put. Returning NO puts
+// that back without touching the player: fullscreen landscape playback is driven by
+// -allowedFullScreenOrientations (see YTWatchViewController below, and the portraitFullscreen
+// toggle), not by this flag. Default OFF, so nothing changes until the user asks for it.
+- (BOOL)iosEnableRotationEverywhere { return ytlBool(@"noFeedRotation") ? NO : %orig; }
 %end
 
 // ============================================================================
