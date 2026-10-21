@@ -72,9 +72,22 @@ static void ytlAddPhotoURLsFromString(NSString *s, NSMutableArray<NSURL *> *out)
 // still emit it):
 //   - avatars/badges are circular-cropped thumbnails ("-c-k-c0x…") at small sizes (=s48/s88/s176)
 //   - attachments come through at a large explicit size (=s1024 today)
+// The two substrings that say "a post attachment URL may be in here". Single-sourced because the
+// byte gate (ytlScanAndCacheImages) and the string gate (ytlPostImageURLFromEntry) ask the same
+// question in different types -- and they DID drift: 21.36 dropped fcrop64, the fix landed on the
+// feed side only, and the ⋯-menu path stayed dead for weeks with no crash and no log to show it.
+#define YTL_POST_IMAGE_MARKER_LEGACY  @"fcrop64"   // <= 21.31.x
+#define YTL_POST_IMAGE_MARKER_CURRENT @"-rw-nd"    // 21.36.x, e.g. "=s1024-rw-nd-v1"
+
+static BOOL ytlStringHasPostImageMarker(NSString *s) {
+    return s.length
+        && ([s containsString:YTL_POST_IMAGE_MARKER_LEGACY]
+         || [s containsString:YTL_POST_IMAGE_MARKER_CURRENT]);
+}
+
 static BOOL ytlIsPostImageURLString(NSString *c) {
     if (!c.length) return NO;
-    if ([c containsString:@"fcrop64"]) return YES;   // legacy form, <= 21.31.x
+    if ([c containsString:YTL_POST_IMAGE_MARKER_LEGACY]) return YES;   // legacy form, <= 21.31.x
     if ([c containsString:@"-c-k-c0x"]) return NO;   // circular crop == avatar/badge
     NSRange r = [c rangeOfString:@"=s"];
     if (r.location == NSNotFound) return NO;
@@ -110,7 +123,7 @@ static NSArray<NSString *> *ytlImageGroupContaining(NSString *normURL) {
 }
 
 #if defined(YTL_FLAG_DEBUG)
-// Dump RAW image-URL candidates from element bytes with NO fcrop64 filter. When the filter stops
+// Dump RAW image-URL candidates from element bytes with NO marker filter. When the filter stops
 // matching (as it did on 21.36.6) the cache silently empties and the gallery degrades to a single
 // image with no error anywhere -- this is how we read back the shape the URLs ACTUALLY have now,
 // instead of guessing a new discriminator.
@@ -137,15 +150,15 @@ static void ytlDumpRawImageURLs(NSString *s) {
 #endif
 
 // Scans a feed elementRenderer's raw EML bytes for a multi-image post's image URLs and
-// caches the group. Cheap-gated on the "fcrop64" crop marker so most renderers are skipped.
+// caches the group. Cheap-gated on the post-image markers so most renderers are skipped.
 static void ytlScanAndCacheImages(NSData *data) {
     if (data.length == 0 || data.length > 600000) return;
-    // Cheap pre-filter so most elements never get converted to a string. Two markers: the legacy
-    // crop param, and the resize suffix the 21.36.x attachment URLs carry.
+    // Cheap pre-filter so most elements never get converted to a string. See
+    // ytlStringHasPostImageMarker for why the marker list lives in one place.
     static NSData *marker, *marker2; static dispatch_once_t once;
     dispatch_once(&once, ^{
-        marker  = [@"fcrop64" dataUsingEncoding:NSASCIIStringEncoding];
-        marker2 = [@"-rw-nd"  dataUsingEncoding:NSASCIIStringEncoding];
+        marker  = [YTL_POST_IMAGE_MARKER_LEGACY  dataUsingEncoding:NSASCIIStringEncoding];
+        marker2 = [YTL_POST_IMAGE_MARKER_CURRENT dataUsingEncoding:NSASCIIStringEncoding];
     });
     BOOL hasMarker = [data rangeOfData:marker options:0 range:NSMakeRange(0, data.length)].location != NSNotFound
                   || [data rangeOfData:marker2 options:0 range:NSMakeRange(0, data.length)].location != NSNotFound;
@@ -2830,7 +2843,8 @@ static NSURL *ytlImageURLForView(UIView *rootView, CGPoint point) {
 
 // Appends any community-post photo URLs found in a string (a node/element/renderer
 // description) to `out`, in order, deduped by =s0-normalized form. Post attachment images
-// carry a "-fcrop64" crop directive, which distinguishes them from avatars/emoji/badges.
+// carry a post-image marker (see ytlIsPostImageURLString), which distinguishes them from
+// avatars/emoji/badges. NB 21.36.x dropped the old "fcrop64" directive -- do not re-hardcode it.
 // This reads the post's model text, so it finds ALL images even ones not yet realized in
 // the lazily-loaded carousel.
 static void ytlAddPhotoURLsFromString(NSString *s, NSMutableArray<NSURL *> *out) {
@@ -2896,7 +2910,7 @@ static BOOL ytlDescIsPost(NSString *desc) {
 // through the same -[YTMenuController actionsForRenderers:…] we use for the queue, with a backstage
 // entry renderer. Stock YouTube gives post images NO interaction, so this is purely additive: the
 // custom long-press stays as primary/fallback, and we ALSO surface Open/Save/Copy in the ⋯ menu so
-// the feature survives the gesture layer breaking. Image extraction is unchanged (fcrop64 node walk
+// the feature survives the gesture layer breaking. Image extraction is unchanged (marker node walk
 // + feed-time cache); only the delivery path is added.
 
 // Climb from the menu anchor (the ⋯ button view) to the enclosing post CONTENT container node.
@@ -2949,7 +2963,7 @@ static NSURL *ytlPostImageURLFromEntry(id entry) {
             s = [[NSString alloc] initWithData:data encoding:NSISOLatin1StringEncoding]; // lossless byte->char
     }
     if (!s) s = [entry description];
-    if (![s containsString:@"fcrop64"]) return nil;                   // fast reject: videos / text-only posts
+    if (!ytlStringHasPostImageMarker(s)) return nil;                  // fast reject: videos / text-only posts
     NSMutableArray<NSURL *> *found = [NSMutableArray array];
     ytlAddPhotoURLsFromString(s, found);
     if (found.count >= 2) ytlRecordImageGroup(found);
