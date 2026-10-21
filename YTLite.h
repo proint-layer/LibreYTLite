@@ -94,6 +94,9 @@ static inline NSInteger ytlIntTraced(NSString *key) {
 @property (nonatomic, assign, readonly) YTPivotBarViewController *pivotBarViewController;
 - (void)hidePivotBar;
 - (void)showPivotBar;
+// Real selector on 21.36.6 (ipsw class-dump). Gates the feed-rotation lock so fullscreen video
+// can still go landscape -- guard every send with ytlSafeResponds, like any hand-declared one.
+- (BOOL)isWatchPageFullScreen;
 @end
 
 @interface YTPivotBarView : UIView
