@@ -916,10 +916,29 @@ static __weak YTPlayerViewController *gYTLPlayer;
 // YTWatchLayerViewController, YTAppReelWatchRootViewController all implement it). If a future
 // build ever regresses that, the fix is to gate this on a tracked fullscreen flag rather than to
 // widen the mask here.
+// Gate: never clamp while the watch page is fullscreen, or tilting during playback gives you a
+// PORTRAIT fullscreen instead of landscape (observed on device -- the earlier assumption that iOS
+// would ask the topmost VC and leave the player alone was simply wrong; this root-VC answer does
+// reach the player). -isWatchPageFullScreen is a real selector on 21.36.6 per class-dump, but it
+// is one WE declare, so it goes through ytlSafeResponds like every other hand-declared send.
+static BOOL ytlRotationLockActive(YTAppViewControllerImpl *appVC) {
+    if (!ytlBool(@"noFeedRotation")) return NO;
+    if (ytlSafeResponds(appVC, @selector(isWatchPageFullScreen), @"noFeedRotation", YTL_SITE)
+        && [appVC isWatchPageFullScreen])
+        return NO;                      // fullscreen video: let it rotate
+    return YES;
+}
+
 %hook YTAppViewControllerImpl
+// -supportedInterfaceOrientations alone only corrects the orientation AFTER the rotation has
+// begun, so the feed visibly flicks to landscape and snaps back. Refusing autorotation up front
+// is what stops the flick. YTAppViewControllerImpl does not implement this itself (class-dump),
+// so there is no %orig to chain -- UIViewController's default is YES, which is what we return.
+- (BOOL)shouldAutorotate {
+    return ytlRotationLockActive(self) ? NO : YES;
+}
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    if (!ytlBool(@"noFeedRotation")) return %orig;
-    YTL_NOTE(@"ROTLOCK clamping root VC to portrait (orig=%lu)", (unsigned long)%orig);
+    if (!ytlRotationLockActive(self)) return %orig;
     return UIInterfaceOrientationMaskPortrait;
 }
 %end
