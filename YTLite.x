@@ -351,33 +351,12 @@ static void ytlPipRearm(MLPIPController *pip) {
 - (NSMutableArray *)adSlotsArray      { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; } // ...and here too.
 %end
 
-// Shorts / Reels ads -- DOES NOT WORK (verified on-device 2026-09-23; investigation cancelled).
-// Theory was: the YTIPlayerResponse hook above only covers the WATCH page, while the Shorts path
-// carries its own adSlotsArray in these five messages (all verified present on 21.25.5/21.31.3/
-// 21.36.6). Hooked all five -- sponsored Shorts STILL appear while scrolling, so either these GPB
-// accessors aren't firing or ad Shorts arrive by another route entirely (YTIReelWatchSequenceEntry
-// is just {command, trackingParams, isCounterfactual}, so ad entries aren't structurally flaggable).
-// Left in place because they're harmless and gated on noAds, but do NOT assume they do anything.
-// Next step if ever resumed: a POST_DEBUG build with traces on each hook to see which (if any) fire.
-%hook YTIReelWatchSequenceAdsConfig
-- (NSMutableArray *)adSlotsArray { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; }
-%end
-
-%hook YTIReelItemWatchResponse
-- (NSMutableArray *)adSlotsArray { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; }
-%end
-
-%hook YTIShortsAdsRenderer
-- (NSMutableArray *)adSlotsArray { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; }
-%end
-
-%hook YTIReelNonVideoAdRenderer
-- (NSMutableArray *)adSlotsArray { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; }
-%end
-
-%hook YTIReelPlayerOverlayRenderer
-- (NSMutableArray *)adSlotsArray { return ytlBool(@"noAds") ? [NSMutableArray array] : %orig; }
-%end
+// REMOVED: five Shorts/Reels ad-slot hooks (YTIReelWatchSequenceAdsConfig, YTIReelItemWatchResponse,
+// YTIShortsAdsRenderer, YTIReelNonVideoAdRenderer, YTIReelPlayerOverlayRenderer), each nulling an
+// adSlotsArray. Verified on-device 2026-09-23: ads still appear while scrolling Shorts, so the
+// hooks install but achieve nothing -- Shorts ads do not come through adSlotsArray. Investigation
+// was cancelled as low value. Don't re-add this shape; find where the Shorts ad actually enters
+// (an ELM renderer or the reel sequence response) before trying again.
 
 // Spam signals are the fingerprinting blob the app ships with ad requests.
 // Hand back nil and it stops asking about ads with our device in tow.

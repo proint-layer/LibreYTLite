@@ -227,14 +227,11 @@
 "Yes" = "Có";
 "No" = "Không";
 
-"SelectAction" = "Chọn hành động";
 "CopyTitle" = "Sao chép tiêu đề";
 "CopyDescription" = "Sao chép mô tả";
 "CopyPostText" = "Sao chép văn bản bài đăng";
 "SaveCurrentImage" = "Lưu hình ảnh hiện tại";
 "CopyCurrentImage" = "Sao chép hình ảnh hiện tại";
-"SavePostAsImage" = "Lưu bài đăng dưới dạng hình ảnh";
-"CopyPostAsImage" = "Sao chép bài đăng dưới dạng hình ảnh";
 "CopyCommentText" = "Sao chép văn bản bình luận";
 "SaveCommentAsImage" = "Lưu bình luận dưới dạng hình ảnh";
 "CopyCommentAsImage" = "Sao chép bình luận dưới dạng hình ảnh";

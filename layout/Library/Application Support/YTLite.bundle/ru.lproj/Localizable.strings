@@ -227,14 +227,11 @@
 "Yes" = "Да";
 "No" = "Нет";
 
-"SelectAction" = "Выберите действие";
 "CopyTitle" = "Скопировать название";
 "CopyDescription" = "Скопировать описание";
 "CopyPostText" = "Скопировать текст поста";
 "SaveCurrentImage" = "Сохранить данное фото";
 "CopyCurrentImage" = "Скопировать данное фото";
-"SavePostAsImage" = "Сохранить пост как фото";
-"CopyPostAsImage" = "Скопировать пост как фото";
 "CopyCommentText" = "Скопировать текст комментария";
 "SaveCommentAsImage" = "Сохранить комментарий как фото";
 "CopyCommentAsImage" = "Скопировать комментарий как фото";

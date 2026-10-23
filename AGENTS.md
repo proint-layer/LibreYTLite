@@ -4,7 +4,7 @@ This file orients human and AI contributors working in this repo. Read it before
 
 ## 1. What this project is
 
-LibreYTLite is a clean, **from-source** open fork of [YTLite](https://github.com/Dayanch96/YTLite), an iOS tweak that patches the stock YouTube app to add ad-blocking, background playback, quality/speed unlocks, UI cleanup, and download helpers. It is written in Objective-C using **Theos + Logos** and is injected into a decrypted YouTube IPA for sideloading (rootless-capable).
+LibreYTLite is a clean, **from-source** open fork of [YTLite](https://github.com/Dayanch96/YTLite), an iOS tweak that patches the stock YouTube app to add ad-blocking, background playback, quality/speed unlocks, and UI cleanup. It is written in Objective-C using **Theos + Logos** and is injected into a decrypted YouTube IPA for sideloading (rootless-capable).
 
 **Philosophy — from source, no DRM.** The fork is branched from the last MIT-licensed release of upstream YTLite (`Copyright (c) 2023 dayanch96`, see `LICENSE`) before that project went closed-source. The closed 5.x line ships a separately-injected DRM binary and obfuscates its identifier strings with XOR encoding. This fork deliberately contains **only buildable source** — no pre-built blobs, no DRM, no obfuscation — so the entire tweak can be audited and compiled by anyone. When adding code, never introduce a pre-compiled binary dependency or anything that can't be built from source in CI.
 
@@ -13,7 +13,7 @@ Note the internal name is still `YTLite`: the tweak target, the `com.dvntm.ytlit
 ## 2. Repo layout
 
 ```
-YTLite.x            Main tweak — all runtime/player/feed/ad hooks (~2900 lines)
+YTLite.x            Main tweak — all runtime/player/feed/ad hooks (~3700 lines)
 Settings.x          In-app settings UI (hooks YTSettingsSectionItemManager etc.)
 Sideloading.x       Keychain access-group + bundle-ID patching for sideloaded IPAs
 YTNativeShare.x     Native iOS share sheet integration
