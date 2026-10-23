@@ -41,13 +41,13 @@ static NSString *GetCacheSize() {
 + (NSArray *)orderedGroups {
     NSArray *groups = %orig;
     for (id group in groups) {
-        NSArray *categories = [group valueForKey:@"_orderedCategories"];
+        NSArray *categories = ytlSafeValueForKey(group, @"_orderedCategories", @"settingsUI", YTL_SITE);
         if ([categories containsObject:@(YTLiteSection)]) break;
         NSUInteger insertIndex = [categories indexOfObject:@(1)];
         if (insertIndex != NSNotFound) {
             NSMutableArray *mutableCategories = [categories mutableCopy];
             [mutableCategories insertObject:@(YTLiteSection) atIndex:insertIndex + 1];
-            [group setValue:mutableCategories forKey:@"_orderedCategories"];
+            ytlSafeSetValue(group, mutableCategories, @"_orderedCategories", @"settingsUI", YTL_SITE);
             break;
         }
     }
@@ -66,8 +66,8 @@ static NSString *GetCacheSize() {
     %orig;
 
     BOOL isYTLite = [self.accessibilityIdentifier isEqualToString:@"YTLiteSectionItem"];
-    YTTouchFeedbackController *feedback = [self valueForKey:@"_touchFeedbackController"];
-    ABCSwitch *abcSwitch = [self valueForKey:@"_switch"];
+    YTTouchFeedbackController *feedback = ytlSafeValueForKey(self, @"_touchFeedbackController", @"settingsUI", YTL_SITE);
+    ABCSwitch *abcSwitch = ytlSafeValueForKey(self, @"_switch", @"settingsUI", YTL_SITE);
 
     if (isYTLite) {
         feedback.feedbackColor = [UIColor colorWithRed:0.75 green:0.50 blue:0.90 alpha:1.0];
@@ -133,7 +133,7 @@ static NSString *GetCacheSize() {
 - (void)updateYTLiteSectionWithEntry:(id)entry {
     NSMutableArray *sectionItems = [NSMutableArray array];
     Class YTSettingsSectionItemClass = %c(YTSettingsSectionItem);
-    YTSettingsViewController *settingsViewController = [self valueForKey:@"_settingsViewControllerDelegate"];
+    YTSettingsViewController *settingsViewController = ytlSafeValueForKey(self, @"_settingsViewControllerDelegate", @"settingsUI", YTL_SITE);
 
     YTSettingsSectionItem *space = [%c(YTSettingsSectionItem) itemWithTitle:nil accessibilityIdentifier:@"YTLiteSectionItem" detailTextBlock:nil selectBlock:nil];
 

@@ -160,12 +160,10 @@ static inline NSInteger ytlIntTraced(NSString *key) {
 @end
 
 @interface YTPlayerViewController : UIViewController
-@property (nonatomic, assign, readonly) YTPlayerResponse *playerResponse;
 @property (nonatomic, assign, readonly) YTSingleVideoController *activeVideo;
 @property (nonatomic, weak, readwrite) UIViewController *activeVideoPlayerOverlay;
 @property (nonatomic, weak, readwrite) UIViewController *parentViewController;
 @property (nonatomic, readonly) NSString *contentVideoID;
-- (void)setActiveCaptionTrack:(id)track;
 - (void)setPlaybackRate:(CGFloat)rate;
 - (void)shortsToRegular;
 - (void)autoFullscreen;
@@ -310,6 +308,11 @@ static inline NSInteger ytlIntTraced(NSString *key) {
 @interface YTMainAppVideoPlayerOverlayViewController : UIViewController
 @property (nonatomic, weak, readwrite) YTPlayerViewController *parentViewController;
 - (CGFloat)currentPlaybackRate;
+// These two were declared on YTPlayerViewController, where class-dump says they do NOT exist --
+// both live on the player OVERLAY controllers. Sending them to the player VC was an abort
+// waiting for someone to switch disableAutoCaptions or copyVideoInfo on.
+- (void)setActiveCaptionTrack:(id)track;
+@property (nonatomic, assign, readonly) YTPlayerResponse *playerResponse;
 @end
 
 @interface YTInlinePlayerBarContainerView : UIView

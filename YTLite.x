@@ -1645,9 +1645,17 @@ void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video
 
 %new
 - (void)turnOffCaptions {
-    if ([self.view.superview isKindOfClass:NSClassFromString(@"YTWatchView")]) {
-        [self setActiveCaptionTrack:nil];
-    }
+    // -setActiveCaptionTrack: is NOT on YTPlayerViewController. class-dump puts it on the player
+    // OVERLAY controllers (YTMainAppVideoPlayerOverlayViewController and friends), so sending it
+    // to `self` here was an unrecognized selector waiting to abort the moment anyone switched
+    // disableAutoCaptions on. Go through the overlay, exactly as setAutoSpeed above does.
+    if (![self.view.superview isKindOfClass:NSClassFromString(@"YTWatchView")]) return;
+    if (![self.activeVideoPlayerOverlay isKindOfClass:NSClassFromString(@"YTMainAppVideoPlayerOverlayViewController")]) return;
+
+    YTMainAppVideoPlayerOverlayViewController *overlayVC =
+        (YTMainAppVideoPlayerOverlayViewController *)self.activeVideoPlayerOverlay;
+    if (ytlSafeResponds(overlayVC, @selector(setActiveCaptionTrack:), @"disableAutoCaptions", YTL_SITE))
+        [overlayVC setActiveCaptionTrack:nil];
 }
 
 %new
@@ -1854,7 +1862,16 @@ void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video
 %end
 
 // Hide buttons under the video player (@PoomSmart)
-static BOOL findCell(ASNodeController *nodeController, NSArray <NSString *> *identifiers) {
+// Depth-capped: the walk is over a view tree we do not control, and an unbounded recursion here
+// is a stack overflow waiting for a deep layout.
+//
+// BUG this fixes: the `return NO;` used to sit INSIDE the `for (id child …)` body, and the
+// recursive call was itself a bare `return`, so the function examined only the FIRST child and
+// never visited a sibling. Any target that was not on the first branch simply was not found --
+// silently, which is why noPlayerRemixButton / noPlayerClipButton / noPlayerDownloadButton were
+// unreliable rather than obviously broken.
+static BOOL findCell(ASNodeController *nodeController, NSArray <NSString *> *identifiers, int depth) {
+    if (!nodeController || depth > 12) return NO;
     for (id child in [nodeController children]) {
         if ([child isKindOfClass:%c(ELMNodeController)]) {
             NSArray <ELMComponent *> *elmChildren = [(ELMNodeController *)child children];
@@ -1874,10 +1891,8 @@ static BOOL findCell(ASNodeController *nodeController, NSArray <NSString *> *ide
                     return YES;
             }
 
-            return findCell(child, identifiers);
+            if (findCell(child, identifiers, depth + 1)) return YES;
         }
-
-        return NO;
     }
     return NO;
 }
@@ -1888,15 +1903,15 @@ static BOOL findCell(ASNodeController *nodeController, NSArray <NSString *> *ide
         ASCellNode *node = [element node];
         ASNodeController *nodeController = [node controller];
 
-        if (ytlBool(@"noPlayerRemixButton") && findCell(nodeController, @[@"id.video.remix.button"])) {
+        if (ytlBool(@"noPlayerRemixButton") && findCell(nodeController, @[@"id.video.remix.button"], 0)) {
             return CGSizeZero;
         }
 
-        if (ytlBool(@"noPlayerClipButton") && findCell(nodeController, @[@"clip_button.eml"])) {
+        if (ytlBool(@"noPlayerClipButton") && findCell(nodeController, @[@"clip_button.eml"], 0)) {
             return CGSizeZero;
         }
 
-        if (ytlBool(@"noPlayerDownloadButton") && findCell(nodeController, @[@"id.ui.add_to.offline.button"])) {
+        if (ytlBool(@"noPlayerDownloadButton") && findCell(nodeController, @[@"id.ui.add_to.offline.button"], 0)) {
             return CGSizeZero;
         }
     }
@@ -3440,8 +3455,19 @@ BOOL isTabSelected = NO;
     // (unrecognized selector -> crash).
     YTPlayerViewController *playerVC = gYTLPlayer;
     if (!playerVC) return;
-    NSString *title = playerVC.playerResponse.playerData.videoDetails.title;
-    NSString *shortDescription = playerVC.playerResponse.playerData.videoDetails.shortDescription;
+    // -playerResponse is NOT on YTPlayerViewController either (class-dump: it lives on the
+    // overlay controllers / endpoint protos). Unguarded this aborts as soon as copyVideoInfo is
+    // used. Prefer the overlay; fall back to the player VC only if it really does respond.
+    id responseHolder = nil;
+    if ([playerVC.activeVideoPlayerOverlay respondsToSelector:@selector(playerResponse)])
+        responseHolder = playerVC.activeVideoPlayerOverlay;
+    else if (ytlSafeResponds(playerVC, @selector(playerResponse), @"copyVideoInfo", YTL_SITE))
+        responseHolder = playerVC;
+    if (!responseHolder) return;
+
+    YTPlayerResponse *response = [responseHolder playerResponse];
+    NSString *title = response.playerData.videoDetails.title;
+    NSString *shortDescription = response.playerData.videoDetails.shortDescription;
 
     YTDefaultSheetController *sheetController = [%c(YTDefaultSheetController) sheetControllerWithParentResponder:nil];
 
