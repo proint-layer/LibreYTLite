@@ -3190,10 +3190,14 @@ static id ytlInjectPostActions(id actions, UIView *fromView, id entry) {
                     if (image) {
                         YTDefaultSheetController *sheetController = [%c(YTDefaultSheetController) sheetControllerWithParentResponder:nil];
     
+                        // Was: UIImageWriteToSavedPhotosAlbum + an UNCONDITIONAL "Saved" toast.
+                        // That API needs NSPhotoLibraryAddUsageDescription, which this app's
+                        // Info.plist does not have (AGENTS.md 6), so it failed silently while
+                        // telling the user it had worked -- the worst combination. Route through
+                        // downloadImageFromURL, which asks for read-write auth, saves the
+                        // ORIGINAL bytes via addResourceWithType:, and reports the real outcome.
                         [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"SaveProfilePicture") iconImage:YTImageNamed(@"yt_outline_image_24pt") style:0 handler:^ {
-                            UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil);
-
-                            [[%c(YTToastResponderEvent) eventWithMessage:LOC(@"Saved") firstResponder:self.keepalive_node.closestViewController] send];
+                            downloadImageFromURL(self.keepalive_node.closestViewController, PFPURL, YES);
                         }]];
 
                         [sheetController addAction:[%c(YTActionSheetAction) actionWithTitle:LOC(@"CopyProfilePicture") iconImage:YTImageNamed(@"yt_outline_library_image_24pt") style:0 handler:^ {
