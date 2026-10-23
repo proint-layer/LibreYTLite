@@ -59,14 +59,9 @@ static inline NSInteger ytlIntTraced(NSString *key) {
 - (YTSettingsSectionItem *)linkWithTitle:(NSString *)title description:(NSString *)description link:(NSString *)link;
 @end
 
-@interface YTLightweightQTMButton ()
-@property (nonatomic, assign, readwrite, getter=isShouldRaiseOnTouch) BOOL shouldRaiseOnTouch;
-@end
-
 @interface YTQTMButton ()
 @property (nonatomic, strong, readwrite) YTIButtonRenderer *buttonRenderer;
 - (void)setSizeWithPaddingAndInsets:(BOOL)sizeWithPaddingAndInsets;
-- (BOOL)yt_isVisible;
 @end
 
 @interface YTRightNavigationButtons : UIView
@@ -75,9 +70,6 @@ static inline NSInteger ytlIntTraced(NSString *key) {
 @end
 
 @interface YTSearchViewController : UIViewController
-@end
-
-@interface YTNavigationBarTitleView : UIView
 @end
 
 @interface YTChipCloudCell : UICollectionViewCell
@@ -91,7 +83,6 @@ static inline NSInteger ytlIntTraced(NSString *key) {
 @end
 
 @interface YTAppViewControllerImpl : UIViewController
-@property (nonatomic, assign, readonly) YTPivotBarViewController *pivotBarViewController;
 - (void)hidePivotBar;
 - (void)showPivotBar;
 // Real selector on 21.36.6 (ipsw class-dump). Gates the feed-rotation lock so fullscreen video
@@ -105,8 +96,6 @@ static inline NSInteger ytlIntTraced(NSString *key) {
 
 @interface YTPivotBarViewController ()
 @property (nonatomic, weak, readwrite) YTAppViewControllerImpl *parentViewController;
-@property (nonatomic, copy, readwrite) NSString *selectedPivotIdentifier;
-- (YTPivotBarView *)pivotBarView;
 - (void)selectItemWithPivotIdentifier:(id)pivotIndentifier;
 @end
 
@@ -175,7 +164,6 @@ static inline NSInteger ytlIntTraced(NSString *key) {
 @property (nonatomic, assign, readonly) YTSingleVideoController *activeVideo;
 @property (nonatomic, weak, readwrite) UIViewController *activeVideoPlayerOverlay;
 @property (nonatomic, weak, readwrite) UIViewController *parentViewController;
-@property (nonatomic, weak, readwrite) UIViewController *UIDelegate;
 @property (nonatomic, readonly) NSString *contentVideoID;
 - (void)setActiveCaptionTrack:(id)track;
 - (void)setPlaybackRate:(CGFloat)rate;
@@ -219,10 +207,6 @@ static inline NSInteger ytlIntTraced(NSString *key) {
 @property (nonatomic, weak, readwrite) YTScrollableNavigationController *navigationController;
 @end
 
-@interface YTPivotBarViewController ()
-@property (nonatomic, weak, readwrite) YTShortsPlayerViewController *scrubberDelegate;
-@end
-
 @interface YTEngagementPanelIdentifier : NSObject
 @property (nonatomic, copy, readonly) NSString *identifierString;
 @end
@@ -254,10 +238,6 @@ static inline NSInteger ytlIntTraced(NSString *key) {
 - (void)didTapCopyInfoButton:(UIButton *)sender;
 @end
 
-@interface YTSegmentableInlinePlayerBarView : UIView
-@property (nonatomic, assign, readwrite) BOOL enableSnapToChapter;
-@end
-
 @interface YTPlayabilityResolutionUserActionUIController : NSObject
 - (void)confirmAlertDidPressConfirm;
 @end
@@ -271,21 +251,11 @@ static inline NSInteger ytlIntTraced(NSString *key) {
 @interface YTReelPlayerPivotButton : YTReelPlayerButton
 @end
 
-@interface ELMCellNode
-@end
-
 @interface _ASCollectionViewCell : UICollectionViewCell
 - (id)node;
 @end
 
-@interface YTAsyncCollectionView : UICollectionView
-- (void)removeCellsAtIndexPath:(NSIndexPath *)indexPath;
-@end
-
 @interface YTReelTransparentStackView : UIStackView
-@end
-
-@interface YTELMView : UIView
 @end
 
 @interface ASNodeAncestryEnumerator : NSEnumerator
@@ -329,17 +299,11 @@ static inline NSInteger ytlIntTraced(NSString *key) {
 - (id)initWithTitle:(NSString *)title rate:(float)rate;
 @end
 
-@interface YTVarispeedSwitchController : NSObject
-- (void)addActionForOption:(YTVarispeedSwitchControllerOption *)option;
-@end
-
 @interface YTLabel : UILabel
-- (void)setFontAttributes:(id)attributes text:(NSString *)text;
 @end
 
 @interface YTInlinePlayerScrubUserEducationView : UIView
 @property (nonatomic, assign, readwrite) NSUInteger labelType;
-- (YTLabel *)userEducationLabel;
 - (void)setVisible:(BOOL)visible;
 @end
 
@@ -371,13 +335,6 @@ static inline NSInteger ytlIntTraced(NSString *key) {
 @interface YTSpeedmasterController : NSObject
 @end
 
-@interface YTFormattedStringLabel : UILabel
-@end
-
-@interface YTActionSheetHeaderView : UIView
-- (void)showHeaderDivider;
-@end
-
 @interface YTActionSheetAction : NSObject
 + (instancetype)actionWithTitle:(NSString *)title iconImage:(UIImage *)image style:(NSInteger)style handler:(void (^)(void))handler;
 + (instancetype)actionWithTitle:(NSString *)title iconImage:(UIImage *)image secondaryIconImage:(UIImage *)secondaryIconImage accessibilityIdentifier:(NSString *)identifier handler:(void (^)(void))handler;
@@ -386,12 +343,10 @@ static inline NSInteger ytlIntTraced(NSString *key) {
 
 @interface YTDefaultSheetController : NSObject
 - (void)addAction:(YTActionSheetAction *)action;
-- (void)presentFromView:(UIView *)view animated:(BOOL)animated completion:(void(^)(void))completion;
 - (void)presentFromViewController:(UIViewController *)vc animated:(BOOL)animated completion:(void(^)(void))completion;
 - (void)dismissViewControllerAnimated:(BOOL)animated completion:(void(^)(void))completion;
 
 + (instancetype)sheetControllerWithParentResponder:(id)parentResponder;
 + (instancetype)sheetControllerWithParentResponder:(id)parentResponder forcedSheetStyle:(NSInteger)style;
-+ (instancetype)sheetControllerWithMessage:(NSString *)message delegate:(id)delegate parentResponder:(id)parentResponder;
 + (instancetype)sheetControllerWithMessage:(NSString *)message subMessage:(NSString *)subMessage delegate:(id)delegate parentResponder:(id)parentResponder;
 @end
