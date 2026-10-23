@@ -273,19 +273,7 @@ static NSString *GetCacheSize() {
                 [self switchWithTitle:@"HideShortsCamera" key:@"hideShortsCamera"],
                 [self switchWithTitle:@"HideShortsMore" key:@"hideShortsMore"],
                 [self switchWithTitle:@"HideShortsSubscriptions" key:@"hideShortsSubscriptions"],
-                [self switchWithTitle:@"HideShortsLike" key:@"hideShortsLike"],
-                [self switchWithTitle:@"HideShortsDislike" key:@"hideShortsDislike"],
-                [self switchWithTitle:@"HideShortsComments" key:@"hideShortsComments"],
-                [self switchWithTitle:@"HideShortsRemix" key:@"hideShortsRemix"],
-                [self switchWithTitle:@"HideShortsShare" key:@"hideShortsShare"],
-                [self switchWithTitle:@"HideShortsActionBar" key:@"hideShortsActionBar"],
-                [self switchWithTitle:@"HideShortsAvatars" key:@"hideShortsAvatars"],
-                [self switchWithTitle:@"HideShortsThanks" key:@"hideShortsThanks"],
-                [self switchWithTitle:@"HideShortsSource" key:@"hideShortsSource"],
-                [self switchWithTitle:@"HideShortsChannelName" key:@"hideShortsChannelName"],
-                [self switchWithTitle:@"HideShortsDescription" key:@"hideShortsDescription"],
-                [self switchWithTitle:@"HideShortsAudioTrack" key:@"hideShortsAudioTrack"],
-                [self switchWithTitle:@"NoPromotionCards" key:@"hideShortsPromoCards"]
+                [self switchWithTitle:@"HideShortsActionBar" key:@"hideShortsActionBar"]
             ];
 
             YTSettingsPickerViewController *picker = [[%c(YTSettingsPickerViewController) alloc] initWithNavTitle:LOC(@"Shorts") pickerSectionTitle:nil rows:rows selectedItemIndex:NSNotFound parentResponder:[self parentResponder]];
