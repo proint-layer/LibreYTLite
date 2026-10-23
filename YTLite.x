@@ -1992,15 +1992,15 @@ static BOOL findCell(ASNodeController *nodeController, NSArray <NSString *> *ide
 // overlay is now driven by element renderers (setActionBarElementRenderer:/setInfoPanelElementRenderer:/
 // setMetapanelElementRenderer:), so all seven hideShorts* toggles below are inactive. Reviving them
 // needs a rewrite against those renderers. See HOOK_AUDIT.md.
-%hook YTReelWatchPlaybackOverlayView
-- (void)setReelLikeButton:(id)arg1 { if (!ytlBool(@"hideShortsLike")) %orig; }
-- (void)setReelDislikeButton:(id)arg1 { if (!ytlBool(@"hideShortsDislike")) %orig; }
-- (void)setViewCommentButton:(id)arg1 { if (!ytlBool(@"hideShortsComments")) %orig; }
-- (void)setRemixButton:(id)arg1 { if (!ytlBool(@"hideShortsRemix")) %orig; }
-- (void)setShareButton:(id)arg1 { if (!ytlBool(@"hideShortsShare")) %orig; }
-- (void)setNativePivotButton:(id)arg1 { if (!ytlBool(@"hideShortsAvatars")) %orig; }
-- (void)setPivotButtonElementRenderer:(id)arg1 { if (!ytlBool(@"hideShortsAvatars")) %orig; }
-%end
+// REMOVED (21.36.6, ipsw class-dump): YTReelWatchPlaybackOverlayView no longer implements ANY of
+// the per-button setters -- setReelLikeButton:, setReelDislikeButton:, setViewCommentButton:,
+// setRemixButton:, setShareButton:, setNativePivotButton:, setPivotButtonElementRenderer:. The
+// whole action bar is one element renderer now, which is what setActionBarElementRenderer: below
+// hides. Six toggles went with them (hideShortsLike/Dislike/Comments/Remix/Share/Avatars).
+//
+// NB hideShortsShare looked like a false "dead" label because `setShareButton:` IS in the binary
+// -- but on YTLCGoLiveView / YTLCMetadataEditorView (live streaming), not here. A strings hit
+// proves a selector exists somewhere, never that it exists on YOUR class.
 
 // LIVE replacement for the dead per-button setters above. YouTube drives the Shorts right-hand
 // button column through one element renderer now, so we can't hide buttons individually without
@@ -2028,15 +2028,12 @@ static BOOL findCell(ASNodeController *nodeController, NSArray <NSString *> *ide
 }
 %end
 
-%hook YTReelWatchHeaderView
-- (void)setChannelBarElementRenderer:(id)renderer { if (!ytlBool(@"hideShortsChannelName")) %orig; }
-- (void)setHeaderRenderer:(id)renderer { if (!ytlBool(@"hideShortsDescription")) %orig; }
-- (void)setShortsVideoTitleElementRenderer:(id)renderer { if (!ytlBool(@"hideShortsDescription")) %orig; }
-- (void)setSoundMetadataElementRenderer:(id)renderer { if (!ytlBool(@"hideShortsAudioTrack")) %orig; }
-- (void)setActionElement:(id)renderer { if (!ytlBool(@"hideShortsPromoCards")) %orig; }
-- (void)setBadgeRenderer:(id)renderer { if (!ytlBool(@"hideShortsThanks")) %orig; }
-- (void)setMultiFormatLinkElementRenderer:(id)renderer { if (!ytlBool(@"hideShortsSource")) %orig; }
-%end
+// REMOVED (21.36.6, ipsw class-dump): YTReelWatchHeaderView implements none of its seven
+// setters any more -- setChannelBarElementRenderer:, setHeaderRenderer:,
+// setShortsVideoTitleElementRenderer:, setSoundMetadataElementRenderer:, setActionElement:,
+// setBadgeRenderer:, setMultiFormatLinkElementRenderer:. Six more toggles went with them
+// (hideShortsChannelName/Description/AudioTrack/PromoCards/Thanks/Source). The Shorts header
+// moved to ELM element renderers; reviving these means an ELM rewrite, not a re-hook.
 
 static BOOL isOverlayShown = YES;
 
