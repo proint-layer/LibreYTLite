@@ -227,14 +227,11 @@
 "Yes" = "是";
 "No" = "不";
 
-"SelectAction" = "选择操作";
 "CopyTitle" = "复制标题";
 "CopyDescription" = "复制描述";
 "CopyPostText" = "复制帖子文本";
 "SaveCurrentImage" = "保存当前图片";
 "CopyCurrentImage" = "复制当前图片";
-"SavePostAsImage" = "帖子另存为图片";
-"CopyPostAsImage" = "帖子作为图片复制";
 "CopyCommentText" = "复制评论文本";
 "SaveCommentAsImage" = "评论另存为图片";
 "CopyCommentAsImage" = "评论作为图片复制";

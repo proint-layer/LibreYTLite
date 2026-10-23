@@ -227,14 +227,11 @@
 "Yes" = "はい";
 "No" = "いいえ";
 
-"SelectAction" = "操作を選択";
 "CopyTitle" = "タイトルをコピー";
 "CopyDescription" = "概要をコピー";
 "CopyPostText" = "投稿のテキストをコピー";
 "SaveCurrentImage" = "現在の画像を保存";
 "CopyCurrentImage" = "現在の画像をコピー";
-"SavePostAsImage" = "投稿を画像として保存";
-"CopyPostAsImage" = "投稿を画像としてコピー";
 "CopyCommentText" = "コメントのテキストをコピー";
 "SaveCommentAsImage" = "コメントを画像として保存";
 "CopyCommentAsImage" = "コメントを画像としてコピー";

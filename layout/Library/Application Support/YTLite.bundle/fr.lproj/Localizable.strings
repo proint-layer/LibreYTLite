@@ -227,14 +227,11 @@
 "Yes" = "Oui";
 "No" = "Non";
 
-"SelectAction" = "Sélectionner une action";
 "CopyTitle" = "Copier le titre";
 "CopyDescription" = "Copier la description";
 "CopyPostText" = "Copier le texte de la publication";
 "SaveCurrentImage" = "Save current image";
 "CopyCurrentImage" = "Copy current image";
-"SavePostAsImage" = "Enregistrer la publication en tant qu'image";
-"CopyPostAsImage" = "Copier la publication en tant qu'image";
 "CopyCommentText" = "Copier le texte du commentaire";
 "SaveCommentAsImage" = "Enregistrer le commentaire en tant qu'image";
 "CopyCommentAsImage" = "Copier le commentaire en tant qu'image";

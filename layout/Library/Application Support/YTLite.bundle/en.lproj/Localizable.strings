@@ -71,9 +71,7 @@
 "RemoveFromQueue" = "Remove from queue";
 "ClearQueue" = "Clear queue";
 "ViewQueue" = "View queue";
-"Queue" = "Queue";
 "UpNext" = "Up next";
-"TapToPlay" = "Tap to play";
 "PortraitFullscreen" = "Portrait fullscreen mode";
 "PortraitFullscreenDesc" = "Enables portrait fullscreen mode support.";
 "NoFeedRotation" = "Lock feed to portrait";
@@ -252,14 +250,11 @@
 "Yes" = "Yes";
 "No" = "No";
 
-"SelectAction" = "Select action";
 "CopyTitle" = "Copy title";
 "CopyDescription" = "Copy description";
 "CopyPostText" = "Copy post text";
 "SaveCurrentImage" = "Save current image";
 "CopyCurrentImage" = "Copy current image";
-"SavePostAsImage" = "Save post as image";
-"CopyPostAsImage" = "Copy post as image";
 "CopyCommentText" = "Copy comment text";
 "SaveCommentAsImage" = "Save comment as image";
 "CopyCommentAsImage" = "Copy comment as image";

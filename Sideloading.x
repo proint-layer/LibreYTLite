@@ -71,7 +71,7 @@ static NSString *accessGroupID() {
 //   -[YTHotConfig clientInfraClientConfigIosEnableFillingEncodedHacksInnertubeContext] -> NO
 // We deliberately DON'T: it is the only sideload hook that changes what the SERVER sends (it strips
 // client "encoded hacks" from the InnerTube context), and the community-post image viewer parses
-// those server-driven ELM payloads (id.ui.backstage.post / post_base_wrapper node ids). Suspected of
+// those server-driven ELM payloads (id.ui.backstage.post / post_base_wrapper node ids).
 // Login does not need it -- SSOClientLogin + the NSBundle spoof do the work. (It was briefly
 // suspected of breaking the community-post long-press; that turned out to be unrelated -- the
 // long-press is gated on the `postManager` default, which a clean reinstall had reset. Omitted here
@@ -124,7 +124,7 @@ static NSString *accessGroupID() {
 }
 %end
 
-// Fix login for YouTube 18.13.2 and higher
+// Fix login for sideloaded builds (the supported window is YouTube 21.x)
 %hook SSOKeychainHelper
 + (NSString *)accessGroup {
     return accessGroupID();
