@@ -41,8 +41,6 @@
 "NoFullscreenActionsDesc" = "Désactive le panneau d'actions en mode plein écran.";
 "PersistentProgressBar" = "Barre de progression persistante";
 "PersistentProgressBarDesc" = "Affiche toujours la barre de progression dans le lecteur";
-"StockVolumeHUD" = "HUD du volume original";
-"StockVolumeHUDDesc" = "Affiche le HUD du volume du système en plein écran.";
 "NoRelatedVids" = "Pas de vidéos associées dans l'overlay";
 "NoRelatedVidsDesc" = "Supprime les vidéos associées affichées dans l'overlay en faisant glisser vers le haut.";
 "NoPromotionCards" = "Masquer les cartes de promotion payante";
@@ -199,8 +197,6 @@
 "NoRelatedWatchNextsDesc" = "Masque toutes les vidéos sous le lecteur, ne laissant que les informations sur la vidéo et la section des commentaires.";
 "StickSortComments" = "Épingler l'en-tête des commentaires";
 "StickSortCommentsDesc" = "Épingle l'en-tête de tri des commentaires (Meilleurs, Plus récents) pour qu'il ne disparaisse pas pendant le défilement.";
-"HideSortComments" = "Masquer l'en-tête des commentaires";
-"HideSortCommentsDesc" = "Masque l'en-tête de tri des commentaires (Meilleurs, Plus récents) pour qu'il n'apparaisse jamais.";
 "PlaylistOldMinibar" = "Ancienne barre latérale de lecture";
 "PlaylistOldMinibarDesc" = "Remplace le nouveau panneau de lecture flottant par l'ancien.";
 "DisableRTL" = "Désactiver le formatage de droite à gauche";

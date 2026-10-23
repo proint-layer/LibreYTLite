@@ -41,8 +41,6 @@
 "NoFullscreenActionsDesc" = "在全屏模式下禁用操作面板。";
 "PersistentProgressBar" = "持续进度条";
 "PersistentProgressBarDesc" = "始终在播放器中显示进度条。";
-"StockVolumeHUD" = "原生音量 HUD";
-"StockVolumeHUDDesc" = "全屏显示系统音量 HUD。";
 "NoRelatedVids" = "没有相关视频";
 "NoRelatedVidsDesc" = "通过向上滑动删除播放界面中显示的相关视频。";
 "NoPromotionCards" = "隐藏付费";
@@ -199,8 +197,6 @@
 "NoRelatedWatchNextsDesc" = "隐藏播放器下方的所有视频，仅保留视频信息和评论部分。";
 "StickSortComments" = "固定评论排序";
 "StickSortCommentsDesc" = "固定评论顶部排序功能按钮（热门、时间），滚动时不会消失。";
-"HideSortComments" = "隐藏评论排序";
-"HideSortCommentsDesc" = "隐藏评论排序功能，使它永远不会出现。";
 "PlaylistOldMinibar" = "旧播放列表";
 "PlaylistOldMinibarDesc" = "将新的浮动播放列表面板替换为旧的浮动播放列表面板。";
 "DisableRTL" = "禁用 RTL 格式";

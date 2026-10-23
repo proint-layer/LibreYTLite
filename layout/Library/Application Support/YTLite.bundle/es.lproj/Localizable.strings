@@ -41,8 +41,6 @@
 "NoFullscreenActionsDesc" = "Desactiva el panel de acciones en el modo de pantalla completa.";
 "PersistentProgressBar" = "Barra de progreso persistente";
 "PersistentProgressBarDesc" = "Muestra siempre la barra de progreso en el reproductor.";
-"StockVolumeHUD" = "HUD de volumen del sistema";
-"StockVolumeHUDDesc" = "Muestra el HUD de volumen del sistema a pantalla completa.";
 "NoRelatedVids" = "Sin vídeos relacionados en la superposición";
 "NoRelatedVidsDesc" = "Elimina los vídeos relacionados que se muestran en la superposición al deslizar hacia arriba.";
 "NoPromotionCards" = "Ocultar tarjetas de promoción pagada";
@@ -199,8 +197,6 @@
 "NoRelatedWatchNextsDesc" = "Oculta todos los vídeos debajo del reproductor, dejando sólo la información del vídeo y la sección de comentarios.";
 "StickSortComments" = "Pegar cabecera de comentarios";
 "StickSortCommentsDesc" = "Los pines ordenan la cabecera de comentarios (Arriba, Más reciente) para que no desaparezca al desplazarse.";
-"HideSortComments" = "Ocultar cabecera de comentarios";
-"HideSortCommentsDesc" = "Oculta la cabecera de los comentarios de ordenación (Top, Newest) para que nunca aparezca.";
 "PlaylistOldMinibar" = "Lista de reproducción antigua minibar";
 "PlaylistOldMinibarDesc" = "Sustituye el nuevo panel flotante de listas de reproducción por el antiguo.";
 "DisableRTL" = "Desactivar el formato RTL";

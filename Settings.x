@@ -201,7 +201,6 @@ static NSString *GetCacheSize() {
                 [self switchWithTitle:@"NoEndScreenCards" key:@"endScreenCards"],
                 [self switchWithTitle:@"NoFullscreenActions" key:@"noFullscreenActions"],
                 [self switchWithTitle:@"PersistentProgressBar" key:@"persistentProgressBar"],
-                [self switchWithTitle:@"StockVolumeHUD" key:@"stockVolumeHUD"],
                 [self switchWithTitle:@"NoRelatedVids" key:@"noRelatedVids"],
                 [self switchWithTitle:@"NoPromotionCards" key:@"noPromotionCards"],
                 [self switchWithTitle:@"NoWatermarks" key:@"noWatermarks"],
@@ -348,7 +347,6 @@ static NSString *GetCacheSize() {
                 [self switchWithTitle:@"NoSearchHistory" key:@"noSearchHistory"],
                 [self switchWithTitle:@"NoRelatedWatchNexts" key:@"noRelatedWatchNexts"],
                 [self switchWithTitle:@"StickSortComments" key:@"stickSortComments"],
-                [self switchWithTitle:@"HideSortComments" key:@"hideSortComments"],
                 [self switchWithTitle:@"PlaylistOldMinibar" key:@"playlistOldMinibar"],
                 [self switchWithTitle:@"DisableRTL" key:@"disableRTL"]
             ];
