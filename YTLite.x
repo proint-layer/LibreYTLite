@@ -225,7 +225,10 @@ static void ytlScanAndCacheImages(NSData *data) {
     if (found.count >= 2) {
         ytlRecordImageGroupsSplitByPost(s, found);
         YTLDBG(@"cached image group: %lu", (unsigned long)found.count);
-        YTL_NOTE(@"POSTSCAN cached group of %lu | first=%@", (unsigned long)found.count,
+        // NB this is the PRE-split total for the whole element; the POSTSPLIT line beside it
+        // reports how many per-post groups were actually cached. Labelling this "cached group
+        // of N" was misleading once the splitter landed.
+        YTL_NOTE(@"POSTSCAN scanned %lu img(s) in element | first=%@", (unsigned long)found.count,
                  ytMaxResURLString(found.firstObject.absoluteString));
     } else if (found.count == 1) {
         // The bytes carried the crop marker but only ONE image URL -- i.e. the element no longer
