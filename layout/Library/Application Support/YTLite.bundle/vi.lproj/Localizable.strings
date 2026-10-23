@@ -41,8 +41,6 @@
 "NoFullscreenActionsDesc" = "Vô hiệu hóa bảng hành động ở chế độ toàn màn hình.";
 "PersistentProgressBar" = "Thanh tiến trình liên tục";
 "PersistentProgressBarDesc" = "Luôn hiển thị thanh tiến trình trong trình phát.";
-"StockVolumeHUD" = "Sử dụng thanh âm lượng mặc định của iOS";
-"StockVolumeHUDDesc" = "Sử dụng thanh âm lượng mặc định ở chế độ toàn màn hình.";
 "NoRelatedVids" = "Không có video liên quan trong lớp phủ";
 "NoRelatedVidsDesc" = "Xóa các video liên quan được hiển thị trong lớp phủ bằng cách vuốt lên.";
 "NoPromotionCards" = "Ẩn thẻ Quảng cáo trả phí";
@@ -199,8 +197,6 @@
 "NoRelatedWatchNextsDesc" = "Ẩn tất cả video bên dưới trình phát, chỉ để lại phần thông tin video và nhận xét.";
 "StickSortComments" = "Dán tiêu đề bình luận";
 "StickSortCommentsDesc" = "Ghim sắp xếp tiêu đề nhận xét (Hàng đầu, Mới nhất) để nó không biến mất khi cuộn.";
-"HideSortComments" = "Ẩn bình luận";
-"HideSortCommentsDesc" = "Ẩn bình luận Short, sắp xếp (Hàng đầu, Mới nhất) để nó không bao giờ xuất hiện.";
 "PlaylistOldMinibar" = "Danh sách phát mini bar cũ";
 "PlaylistOldMinibarDesc" = "Thay thế bảng điều khiển danh sách phát nổi mới bằng bảng điều khiển cũ.";
 "DisableRTL" = "Tắt định dạng RTL";

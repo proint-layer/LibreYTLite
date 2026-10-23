@@ -41,8 +41,6 @@
 "NoFullscreenActionsDesc" = "Disables actions panel in fullscreen mode.";
 "PersistentProgressBar" = "Persistent progress bar";
 "PersistentProgressBarDesc" = "Always shows progress bar in the player.";
-"StockVolumeHUD" = "Stock volume HUD";
-"StockVolumeHUDDesc" = "Displays system volume HUD in fullscreen.";
 "NoRelatedVids" = "No related videos in overlay";
 "NoRelatedVidsDesc" = "Removes related videos displayed in the overlay by swiping up.";
 "NoPromotionCards" = "Hide Paid Promotion cards";
@@ -224,8 +222,6 @@
 "NoRelatedWatchNextsDesc" = "Hides all videos below the player, leaving only the video info and comments section.";
 "StickSortComments" = "Stick comments header";
 "StickSortCommentsDesc" = "Pins sort comments header (Top, Newest) so that it won't disappear while scrolling.";
-"HideSortComments" = "Hide comments header";
-"HideSortCommentsDesc" = "Hides sort comments header (Top, Newest) so it will never appear.";
 "PlaylistOldMinibar" = "Old playlist minibar";
 "PlaylistOldMinibarDesc" = "Replaces the new floating playlist panel with the old one.";
 "DisableRTL" = "Disable RTL formatting";

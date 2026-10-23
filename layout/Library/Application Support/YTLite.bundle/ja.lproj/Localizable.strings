@@ -41,8 +41,6 @@
 "NoFullscreenActionsDesc" = "フルスクリーン時のアクションパネルを無効にします";
 "PersistentProgressBar" = "プログレスバーを常に表示";
 "PersistentProgressBarDesc" = "プレーヤーに常にプログレスバーを表示します";
-"StockVolumeHUD" = "標準の音量HUD";
-"StockVolumeHUDDesc" = "フルスクリーン時にシステムの音量HUDを表示します";
 "NoRelatedVids" = "オーバーレイの関連動画を非表示";
 "NoRelatedVidsDesc" = "上にスワイプして表示される関連動画を非表示にします";
 "NoPromotionCards" = "有料プロモーションカードを非表示";
@@ -199,8 +197,6 @@
 "NoRelatedWatchNextsDesc" = "プレーヤー下に表示されるすべての動画を非表示にし、概要欄とコメントのみにします";
 "StickSortComments" = "コメントヘッダーを固定";
 "StickSortCommentsDesc" = "コメントのソートヘッダー(人気,新しい順)をスクロールしても消えないように固定します";
-"HideSortComments" = "コメントヘッダーを非表示";
-"HideSortCommentsDesc" = "コメントのソートヘッダー(人気,新しい順)を表示しないようにします";
 "PlaylistOldMinibar" = "古いプレイリストミニバー";
 "PlaylistOldMinibarDesc" = "新しいフローティングプレイリストパネルを古いものに置き換えます";
 "DisableRTL" = "RTLの書式設定を無効化";

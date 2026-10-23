@@ -41,8 +41,6 @@
 "NoFullscreenActionsDesc" = "在全螢幕模式下停用操作面板";
 "PersistentProgressBar" = "固定進度條";
 "PersistentProgressBarDesc" = "總是在播放器中顯示進度條";
-"StockVolumeHUD" = "原生系統音量HUD";
-"StockVolumeHUDDesc" = "全螢幕模式中顯示原生系統音量HUD";
 "NoRelatedVids" = "隱藏相關影片";
 "NoRelatedVidsDesc" = "移除全螢幕模式向上滑動時所出現的相關影片";
 "NoPromotionCards" = "隱藏付費推廣";
@@ -199,8 +197,6 @@
 "NoRelatedWatchNextsDesc" = "只留下影片資訊和留言區域";
 "StickSortComments" = "固定留言排序";
 "StickSortCommentsDesc" = "將留言排序（熱門、最新）功能固定，這樣在滾動時就不會消失";
-"HideSortComments" = "隱藏留言排序";
-"HideSortCommentsDesc" = "隱藏留言排序（熱門、最新）功能，將永不顯示";
 "PlaylistOldMinibar" = "舊版播放清單";
 "PlaylistOldMinibarDesc" = "將新版的浮動播放清單面板替換為舊版";
 "DisableRTL" = "停用RTL格式";

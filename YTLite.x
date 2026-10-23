@@ -886,12 +886,10 @@ static __weak YTPlayerViewController *gYTLPlayer;
 - (BOOL)videoZoomFreeZoomEnabled { return ytlBool(@"noFreeZoom") ? NO : %orig; }
 // Stick Sort Buttons in Comments Section
 - (BOOL)enableHideChipsInTheCommentsHeaderOnScrollIos { return ytlBool(@"stickSortComments") ? NO : %orig; }
-// Hide Sort Buttons in Comments Section
-- (BOOL)enableChipsInTheCommentsHeaderIos { return ytlBool(@"hideSortComments") ? NO : %orig; } // DEAD (21.x): selector absent — hideSortComments inactive; see HOOK_AUDIT.md
-// Use System Theme
-- (BOOL)shouldUseAppThemeSetting { return YES; } // DEAD (21.x): selector absent — useSystemTheme inactive; see HOOK_AUDIT.md
-// Dismiss Panel By Swiping in Fullscreen Mode
-- (BOOL)isLandscapeEngagementPanelSwipeRightToDismissEnabled { return YES; } // DEAD (21.x): selector absent; see HOOK_AUDIT.md
+// REMOVED (21.36.6, verified by ipsw class-dump): enableChipsInTheCommentsHeaderIos,
+// shouldUseAppThemeSetting and isLandscapeEngagementPanelSwipeRightToDismissEnabled are not
+// implemented by YTColdConfig any more, so those hooks could never fire. Their toggles
+// (hideSortComments, useSystemTheme) went with them. Don't re-add without checking the dump.
 // Remove Video in Playlist By Swiping To The Right
 - (BOOL)enableSwipeToRemoveInPlaylistWatchEp { return YES; }
 // Enable Old-style Minibar For Playlist Panel
@@ -1974,7 +1972,8 @@ static BOOL findCell(ASNodeController *nodeController, NSArray <NSString *> *ide
 
 %hook YTColdConfig
 - (BOOL)iosEnableVideoPlayerScrubber { return ytlBool(@"shortsProgress") ? YES : NO; }
-- (BOOL)iosUseSystemVolumeControlInFullscreen { return ytlBool(@"stockVolumeHUD") ? YES : NO; } // DEAD (21.x): flag absent, stockVolumeHUD inactive — see HOOK_AUDIT.md
+// REMOVED (21.36.6): iosUseSystemVolumeControlInFullscreen is gone from YTColdConfig, so the
+// stockVolumeHUD toggle never did anything. Verified by class-dump, not by strings.
 %end
 // (Removed dead mobileShortsTabInlined + the YTHotConfig enablePlayerBarForVerticalVideo… block --
 // both absent on 21.x; shortsProgress is covered by iosEnableVideoPlayerScrubber + shouldAlwaysEnablePlayerBar.)
