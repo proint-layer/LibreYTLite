@@ -308,29 +308,13 @@ static void ytlPipRearm(MLPIPController *pip) {
     }
 }
 
-%hook MLPIPController
-- (void)startPictureInPictureWithPaused:(BOOL)paused {
-    gYTLPipController = self;
-    ytlPipEvent([NSString stringWithFormat:@"start(inApp) paused=%d possible=%d active=%d", paused, [self pictureInPicturePossible], [self pictureInPictureActive]]);
-    %orig;
-}
-- (void)stopPictureInPicture               { gYTLPipController = self; ytlPipEvent([NSString stringWithFormat:@"stop (active=%d)", [self pictureInPictureActive]]); %orig; }
-- (void)activatePiPController              { gYTLPipController = self; ytlPipEvent([NSString stringWithFormat:@"activate (possible=%d)", [self pictureInPicturePossible]]); %orig; }
-- (void)deactivatePiPController            { gYTLPipController = self; ytlPipEvent(@"deactivate"); %orig; }
-- (void)renderingViewWillRecreateDisplayLayer { ytlPipEvent(@"recreateDisplayLayer"); %orig; ytlPipRearm(self); }
-- (void)pictureInPictureControllerWillStartPictureInPicture:(id)c { ytlPipEvent([NSString stringWithFormat:@"willStart possible=%d", [self pictureInPicturePossible]]); %orig; }
-- (void)pictureInPictureControllerDidStartPictureInPicture:(id)c { gYTLPipEverStarted = YES; ytlPipEvent(@"didStart"); %orig; }
-// possible= AFTER a stop is the key tell: if it gets stuck 0 here (and stays 0 until a reload),
-// that's the "re-entry dead until you load a new video" bug.
-- (void)pictureInPictureControllerDidStopPictureInPicture:(id)c  { ytlPipEvent([NSString stringWithFormat:@"didStop (possible=%d)", [self pictureInPicturePossible]]); %orig; }
-- (void)pictureInPictureController:(id)c failedToStartPictureInPictureWithError:(id)error { ytlPipEvent([NSString stringWithFormat:@"FAILED %@", error]); %orig; }
-- (void)pictureInPictureControllerWillStopPictureInPicture:(id)c { ytlPipEvent(@"willStop"); %orig; }
-// The "tap the PiP window to return to the app" path (distinct from an auto-stop) -- the exact
-// flow in the bug report. If `possible` drops here and doesn't recover, that's the culprit.
-- (void)pictureInPictureController:(id)c restoreUserInterfaceForPictureInPictureStopWithCompletionHandler:(id)handler {
-    ytlPipEvent([NSString stringWithFormat:@"restoreUI (possible=%d)", [self pictureInPicturePossible]]); %orig;
-}
-%end
+// REMOVED (21.36.6, ipsw class-dump): there is no MLPIPController CLASS on this build -- the
+// name resolves to an `@protocol MLPIPController`, so `%hook MLPIPController` bound to nothing
+// and this mirrored block never ran. Only MLPIPControllerImpl below is real.
+//
+// Worth the warning: a `strings` hit of "MLPIPController" x2 was used to argue this half was
+// still live and should be kept. That hit was the PROTOCOL name. Check @interface in a
+// class-dump, never a bare strings grep. See [selector ownership] in the memory notes.
 
 // [MLPIP dual-hook] Exact mirror of the block above for YouTube 21.31.x, where MLPIPController was
 // renamed MLPIPControllerImpl. Bodies are identical -- keep in sync. Only one of the two class names
@@ -1834,14 +1818,9 @@ void autoSkipShorts(YTPlayerViewController *self, YTSingleVideoController *video
 %end
 
 // Fit Shorts Button Labels For Localizations
-%hook YTReelPlayerButton
-- (UILabel *)titleLabel {
-    UILabel *label = %orig;
-    label.adjustsFontSizeToFitWidth = YES;
-
-    return label;
-}
-%end
+// REMOVED (21.36.6): the YTReelPlayerButton class is gone; YTReelPlayerPivotButton below is the
+// replacement and carries the identical body. The @interface stays in YTLite.h because the Pivot
+// class is declared as its compile-time subclass.
 
 // Same fix for 21.36.x, which renamed the class YTReelPlayerButton -> YTReelPlayerPivotButton.
 // Dual-hook: whichever class is absent on a given build no-ops at %init (objc_getClass -> nil).
