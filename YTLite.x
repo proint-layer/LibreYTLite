@@ -285,22 +285,40 @@ static BOOL gYTLPipEverStarted;                     // did PiP start at least on
 // each a no-op the instant PiP is possible/active. If the log shows possible stays 0 through all
 // tries (layer never readies -> the bg-on "dead until reload" case), re-arm is insufficient and the
 // next step is re-attaching the player (MLAVPIPPlayerLayerView setPlayer:/setVideo:playerConfig:).
-static void ytlPipRearm(MLPIPController *pip) {
+// `reason` names the trigger (which call site scheduled this batch) -- without it a trace shows
+// re-arms appearing from nowhere and you cannot tell a display-layer recreation from an app
+// foreground.
+static void ytlPipRearm(MLPIPController *pip, NSString *reason) {
     if (!ytlBool(@"pipReentryFix") || !pip) return;
     // Coalesce: recreateDisplayLayer and the app-foreground fire ~together, and rapid swipe cycles
     // can stack schedules. One batch of retries per ~1.5s is plenty (each is a no-op once possible).
     static NSTimeInterval lastSchedule = 0;
     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
-    if (now - lastSchedule < 1.5) return;
+    if (now - lastSchedule < 1.5) {
+        ytlPipEvent([NSString stringWithFormat:@"reentry-fix: coalesced (%@)", reason]);
+        return;
+    }
     lastSchedule = now;
+    ytlPipEvent([NSString stringWithFormat:@"reentry-fix: scheduled x4 (%@)", reason]);
     __weak MLPIPController *weak = pip;
     for (int attempt = 1; attempt <= 4; attempt++) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * attempt * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             MLPIPController *s = weak;
-            if (!s) return;
+            if (!s) { ytlPipEvent([NSString stringWithFormat:@"reentry-fix: #%d controller gone", attempt]); return; }
             @try {
-                if ([s pictureInPictureActive] || [s pictureInPicturePossible]) return;   // already fine
-                ytlPipEvent([NSString stringWithFormat:@"reentry-fix: re-arm #%d (possible=0)", attempt]);
+                // Read both ONCE: the guard and the log must report the same observation, and a
+                // second send could legitimately return a different value mid-transition.
+                BOOL act = [s pictureInPictureActive];
+                BOOL poss = [s pictureInPicturePossible];
+                // Log the SKIP as well as the fire. The old code returned here silently, so a
+                // trace showed only attempts that acted -- #1 and #2 vanished with no record of
+                // what the guard saw, which is exactly the evidence needed to judge whether a
+                // re-arm ever lands on a live PiP.
+                if (act || poss) {
+                    ytlPipEvent([NSString stringWithFormat:@"reentry-fix: skip #%d (active=%d possible=%d)", attempt, act, poss]);
+                    return;
+                }
+                ytlPipEvent([NSString stringWithFormat:@"reentry-fix: re-arm #%d (active=0 possible=0)", attempt]);
                 [s activatePiPController];
                 ytlPipEvent([NSString stringWithFormat:@"reentry-fix: after re-arm #%d possible=%d", attempt, [s pictureInPicturePossible]]);
             } @catch (__unused id e) {}
@@ -328,7 +346,7 @@ static void ytlPipRearm(MLPIPController *pip) {
 - (void)stopPictureInPicture               { gYTLPipController = self; ytlPipEvent([NSString stringWithFormat:@"stop (active=%d)", [self pictureInPictureActive]]); %orig; }
 - (void)activatePiPController              { gYTLPipController = self; ytlPipEvent([NSString stringWithFormat:@"activate (possible=%d)", [self pictureInPicturePossible]]); %orig; }
 - (void)deactivatePiPController            { gYTLPipController = self; ytlPipEvent(@"deactivate"); %orig; }
-- (void)renderingViewWillRecreateDisplayLayer { ytlPipEvent(@"recreateDisplayLayer"); %orig; ytlPipRearm(self); }
+- (void)renderingViewWillRecreateDisplayLayer { ytlPipEvent(@"recreateDisplayLayer"); %orig; ytlPipRearm(self, @"recreateDisplayLayer"); }
 - (void)pictureInPictureControllerWillStartPictureInPicture:(id)c { ytlPipEvent([NSString stringWithFormat:@"willStart possible=%d", [self pictureInPicturePossible]]); %orig; }
 - (void)pictureInPictureControllerDidStartPictureInPicture:(id)c { gYTLPipEverStarted = YES; ytlPipEvent(@"didStart"); %orig; }
 - (void)pictureInPictureControllerDidStopPictureInPicture:(id)c  { ytlPipEvent([NSString stringWithFormat:@"didStop (possible=%d)", [self pictureInPicturePossible]]); %orig; }
@@ -3841,8 +3859,8 @@ static NSURL *newCoverURL(NSURL *originalURL) {
                      pip ? [pip pictureInPicturePossible] : -1, pip ? [pip pictureInPictureActive] : -1]);
     }];
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationWillEnterForegroundNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
-        ytlPipEvent(@"════ APP → foreground ════");
-        ytlPipRearm(gYTLPipController);   // automate the "return to the app" recovery: re-arm if stuck
+        ytlPipEvent([NSString stringWithFormat:@"════ APP → foreground ════ (LibreYT %@)", @(OS_STRINGIFY(TWEAK_VERSION))]);
+        ytlPipRearm(gYTLPipController, @"app-foreground");   // automate the "return to the app" recovery: re-arm if stuck
     }];
 
     if (ytlBool(@"shortsOnlyMode") && (ytlBool(@"removeShorts") || ytlBool(@"reExplore"))) {

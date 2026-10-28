@@ -312,7 +312,10 @@ void ytlFlagDiagStart(void) {
         NSSetUncaughtExceptionHandler(&ytlUncaught);
         ytlInstallUnrecognizedLogger();
 
-        NSString *header = [NSString stringWithFormat:@"RUNSTART sweep=%@ all=%@ on=%@ off=%@ ints=%@ label=%@",
+        // Stamp the build. Without it there is no way to tell from a pulled log WHICH binary
+        // produced it -- "is 4.8.2 actually installed?" was unanswerable from the device.
+        NSString *header = [NSString stringWithFormat:@"RUNSTART v%@ sweep=%@ all=%@ on=%@ off=%@ ints=%@ label=%@",
+                            @(OS_STRINGIFY(TWEAK_VERSION)),
                             gSweepActive ? @"YES" : @"NO",
                             gSweepHasBaseline ? (gSweepBaseline ? @"on" : @"off") : @"-",
                             [gSweepOn.allObjects componentsJoinedByString:@","] ?: @"-",
