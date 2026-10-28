@@ -1036,7 +1036,9 @@ static BOOL ytlVideoIsActive(void) {
 
 // Persistent PiP event log (the MLPIPController hooks + %ctor lifecycle observers route here).
 // Appends verbose, timestamped, video-ID-stamped lines to Documents/YTL_PIP_LOG_NAME when the
-// `pipDiagLog` toggle is on (always os_logs regardless). Serial-queued, tail-capped at ~256KB.
+// `pipDiagLog` toggle is on. Serial-queued, tail-capped at ~256KB. (It does NOT os_log -- an
+// earlier version of this comment claimed it did, which sent a PiP investigation looking for
+// stream output that was never emitted. The YTL_NOTE below is the only ungated channel.)
 // Exported/cleared from Advanced settings so the intermittent PiP re-entry bug can be captured
 // without a computer: paste the file and the sequence tells the story.
 static NSString *ytlPipLogPath(void) {
@@ -1044,7 +1046,13 @@ static NSString *ytlPipLogPath(void) {
             stringByAppendingPathComponent:YTL_PIP_LOG_NAME];
 }
 static void ytlPipEvent(NSString *event) {
-    if (!ytlBool(@"pipDiagLog")) return;   // gated: nothing written/logged unless the user opts in
+    // Mirror every PiP event into the flag-diag report BEFORE the pipDiagLog gate. The sweep
+    // harness pulls that one file, so PiP events land on the same timeline as FLAGREAD/FLAGRISK.
+    // Without this, a sweep sees nothing from the whole PiP region unless the user happened to
+    // flip `pipDiagLog` first -- and correlating two logs on two clocks is guesswork. Compiles
+    // to nothing in release (YTL_NOTE is a no-op without YTL_FLAG_DEBUG): zero shipped bytes.
+    YTL_NOTE(@"PIP %@", event);
+    if (!ytlBool(@"pipDiagLog")) return;   // gated: the exportable FILE is opt-in; the note is not
     NSString *vid = gYTLLastActiveVID ?: @"-";
     NSDate *now = [NSDate date];
     static dispatch_queue_t q; static NSDateFormatter *df; static dispatch_once_t once;
