@@ -272,8 +272,17 @@ static void ytlPipEvent(NSString *event);
 // build just no-ops at %init (objc_getClass returns nil). See [MLPIP dual-hook] in the two %hook
 // blocks -- keep them in sync. (21.25.x = MLPIPController, 21.31.x = MLPIPControllerImpl.)
 @interface MLPIPControllerImpl : MLPIPController @end
-static __weak MLPIPController *gYTLPipController;   // last live PiP controller (for the re-arm + bg check)
-static BOOL gYTLPipEverStarted;                     // did PiP start at least once this session?
+// "Last controller TOUCHED" -- written by activate/deactivate/start/stop, which fire for EVERY
+// controller instance, not only the one presenting PiP: two days of log show 358 activates and
+// 254 deactivates spread across many videos. So this is a best-effort handle, never "the PiP
+// owner", and being __weak it silently becomes nil once that controller deallocs.
+static __weak MLPIPController *gYTLPipController;
+// The controller that actually OWNS the live PiP: set at willStart/didStart, cleared at didStop
+// and at failedToStart. gYTLPipController cannot serve this role (see above), and re-arming while
+// a DIFFERENT controller is presenting is the one thing we must never do -- iOS allows exactly one
+// PiP, so activating a second controller can hand it the slot with no ready layer behind it. That
+// is a PiP window which is present but black, i.e. the reported symptom.
+static __weak MLPIPController *gYTLPipLive;
 
 // FIX for the intermittent PiP re-entry failure. After a foreground display-layer recreation
 // YouTube leaves its PiP controller on a not-yet-ready layer, so pictureInPicturePossible sticks at
@@ -289,17 +298,48 @@ static BOOL gYTLPipEverStarted;                     // did PiP start at least on
 // re-arms appearing from nowhere and you cannot tell a display-layer recreation from an app
 // foreground.
 static void ytlPipRearm(MLPIPController *pip, NSString *reason) {
-    if (!ytlBool(@"pipReentryFix") || !pip) return;
+    // Both early-outs used to return in SILENCE, and that silence cost two days of diagnosis: 50
+    // app-foregrounds and 31 display-layer recreations produced not one line between them, so
+    // there was no way to tell "the fix ran and declined to act" from "the fix never ran". Say so.
+    if (!ytlBool(@"pipReentryFix")) {
+        static dispatch_once_t once;   // once per launch -- this would otherwise log every foreground
+        dispatch_once(&once, ^{ ytlPipEvent(@"reentry-fix: DISABLED by setting"); });
+        return;
+    }
+    if (!pip) {
+        ytlPipEvent([NSString stringWithFormat:@"reentry-fix: no controller (%@)", reason]);
+        return;
+    }
+    // Never re-arm while a DIFFERENT controller owns the live PiP. The per-attempt guard further
+    // down reads active/possible on `pip` itself, so an idle controller honestly reports 0/0 and
+    // sails straight through it -- while a real PiP is up on another controller. We would then
+    // call activatePiPController on a second one. See gYTLPipLive above for why that goes black.
+    MLPIPController *live = gYTLPipLive;
+    if (live && live != pip) {
+        @try {
+            if ([live pictureInPictureActive]) {
+                ytlPipEvent([NSString stringWithFormat:
+                    @"reentry-fix: SKIP ALL (%@) -- another controller owns live PiP (live=%p target=%p)",
+                    reason, (void *)live, (void *)pip]);
+                return;
+            }
+        } @catch (__unused id e) {}
+    }
     // Coalesce: recreateDisplayLayer and the app-foreground fire ~together, and rapid swipe cycles
     // can stack schedules. One batch of retries per ~1.5s is plenty (each is a no-op once possible).
+    // recreateDisplayLayer carries the controller the layer actually belongs to and is the trigger
+    // this fix was designed around; app-foreground only has the best-effort global. They fire ~26ms
+    // apart with foreground FIRST (33/33 in the log), so a plain time window made the weaker call
+    // site win every single time and suppressed the stronger one. Let the authoritative one through.
+    BOOL authoritative = [reason isEqualToString:@"recreateDisplayLayer"];
     static NSTimeInterval lastSchedule = 0;
     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
-    if (now - lastSchedule < 1.5) {
+    if (!authoritative && now - lastSchedule < 1.5) {
         ytlPipEvent([NSString stringWithFormat:@"reentry-fix: coalesced (%@)", reason]);
         return;
     }
     lastSchedule = now;
-    ytlPipEvent([NSString stringWithFormat:@"reentry-fix: scheduled x4 (%@)", reason]);
+    ytlPipEvent([NSString stringWithFormat:@"reentry-fix: scheduled x4 (%@) target=%p", reason, (void *)pip]);
     __weak MLPIPController *weak = pip;
     for (int attempt = 1; attempt <= 4; attempt++) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * attempt * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -343,14 +383,18 @@ static void ytlPipRearm(MLPIPController *pip, NSString *reason) {
     ytlPipEvent([NSString stringWithFormat:@"start(inApp) paused=%d possible=%d active=%d", paused, [self pictureInPicturePossible], [self pictureInPictureActive]]);
     %orig;
 }
-- (void)stopPictureInPicture               { gYTLPipController = self; ytlPipEvent([NSString stringWithFormat:@"stop (active=%d)", [self pictureInPictureActive]]); %orig; }
-- (void)activatePiPController              { gYTLPipController = self; ytlPipEvent([NSString stringWithFormat:@"activate (possible=%d)", [self pictureInPicturePossible]]); %orig; }
-- (void)deactivatePiPController            { gYTLPipController = self; ytlPipEvent(@"deactivate"); %orig; }
-- (void)renderingViewWillRecreateDisplayLayer { ytlPipEvent(@"recreateDisplayLayer"); %orig; ytlPipRearm(self, @"recreateDisplayLayer"); }
-- (void)pictureInPictureControllerWillStartPictureInPicture:(id)c { ytlPipEvent([NSString stringWithFormat:@"willStart possible=%d", [self pictureInPicturePossible]]); %orig; }
-- (void)pictureInPictureControllerDidStartPictureInPicture:(id)c { gYTLPipEverStarted = YES; ytlPipEvent(@"didStart"); %orig; }
-- (void)pictureInPictureControllerDidStopPictureInPicture:(id)c  { ytlPipEvent([NSString stringWithFormat:@"didStop (possible=%d)", [self pictureInPicturePossible]]); %orig; }
-- (void)pictureInPictureController:(id)c failedToStartPictureInPictureWithError:(id)error { ytlPipEvent([NSString stringWithFormat:@"FAILED %@", error]); %orig; }
+- (void)stopPictureInPicture               { gYTLPipController = self; ytlPipEvent([NSString stringWithFormat:@"stop (active=%d) pip=%p", [self pictureInPictureActive], (void *)self]); %orig; }
+- (void)activatePiPController              { gYTLPipController = self; ytlPipEvent([NSString stringWithFormat:@"activate (possible=%d) pip=%p", [self pictureInPicturePossible], (void *)self]); %orig; }
+- (void)deactivatePiPController            { gYTLPipController = self; ytlPipEvent([NSString stringWithFormat:@"deactivate pip=%p", (void *)self]); %orig; }
+- (void)renderingViewWillRecreateDisplayLayer { ytlPipEvent([NSString stringWithFormat:@"recreateDisplayLayer pip=%p", (void *)self]); %orig; ytlPipRearm(self, @"recreateDisplayLayer"); }
+// willStart/didStart/didStop are the ONLY callbacks that identify the controller presenting PiP,
+// which is why gYTLPipLive is maintained here and nowhere else. Clearing it on failedToStart
+// matters as much as setting it: willStart fires first, so a failed start would otherwise leave a
+// stale "owner" behind and block every later re-arm.
+- (void)pictureInPictureControllerWillStartPictureInPicture:(id)c { gYTLPipLive = self; ytlPipEvent([NSString stringWithFormat:@"willStart possible=%d pip=%p", [self pictureInPicturePossible], (void *)self]); %orig; }
+- (void)pictureInPictureControllerDidStartPictureInPicture:(id)c { gYTLPipLive = self; ytlPipEvent([NSString stringWithFormat:@"didStart pip=%p", (void *)self]); %orig; }
+- (void)pictureInPictureControllerDidStopPictureInPicture:(id)c  { if (gYTLPipLive == self) gYTLPipLive = nil; ytlPipEvent([NSString stringWithFormat:@"didStop (possible=%d) pip=%p", [self pictureInPicturePossible], (void *)self]); %orig; }
+- (void)pictureInPictureController:(id)c failedToStartPictureInPictureWithError:(id)error { if (gYTLPipLive == self) gYTLPipLive = nil; ytlPipEvent([NSString stringWithFormat:@"FAILED %@ pip=%p", error, (void *)self]); %orig; }
 - (void)pictureInPictureControllerWillStopPictureInPicture:(id)c { ytlPipEvent(@"willStop"); %orig; }
 - (void)pictureInPictureController:(id)c restoreUserInterfaceForPictureInPictureStopWithCompletionHandler:(id)handler {
     ytlPipEvent([NSString stringWithFormat:@"restoreUI (possible=%d)", [self pictureInPicturePossible]]); %orig;
@@ -1062,7 +1106,11 @@ static void ytlPipEvent(NSString *event) {
         df.dateFormat = @"MM-dd HH:mm:ss.SSS";
     });
     dispatch_async(q, ^{
-        NSString *line = [NSString stringWithFormat:@"%@  %@  [vid=%@]\n", [df stringFromDate:now], event, vid];
+        // "lastvid", not "vid": this is gYTLLastActiveVID -- the last video the PLAYER reported
+        // active -- and it has nothing to do with which PiP controller a line is about. Stamped
+        // "vid=" it reads like controller identity and misleads every analysis of this log (it
+        // misled one). Controller identity is the pip=/live=/target= pointers.
+        NSString *line = [NSString stringWithFormat:@"%@  %@  [lastvid=%@]\n", [df stringFromDate:now], event, vid];
         NSString *path = ytlPipLogPath();
         NSFileManager *fm = [NSFileManager defaultManager];
         NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
@@ -3863,8 +3911,12 @@ static NSURL *newCoverURL(NSURL *originalURL) {
         // residual failure (re-arming possible isn't enough). possible=0 here = the fix didn't
         // re-arm in time (a race). This is the line that pins a real failure.
         MLPIPController *pip = gYTLPipController;
-        ytlPipEvent([NSString stringWithFormat:@"════ APP → background ════ (possible=%d active=%d)",
-                     pip ? [pip pictureInPicturePossible] : -1, pip ? [pip pictureInPictureActive] : -1]);
+        MLPIPController *live = gYTLPipLive;
+        // Report BOTH handles. If these ever disagree while PiP is up, the re-arm was aiming at the
+        // wrong object -- that disagreement is the whole reason the pointers are logged.
+        ytlPipEvent([NSString stringWithFormat:@"════ APP → background ════ (possible=%d active=%d) touched=%p live=%p",
+                     pip ? [pip pictureInPicturePossible] : -1, pip ? [pip pictureInPictureActive] : -1,
+                     (void *)pip, (void *)live]);
     }];
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationWillEnterForegroundNotification object:nil queue:nil usingBlock:^(NSNotification *n) {
         ytlPipEvent([NSString stringWithFormat:@"════ APP → foreground ════ (LibreYT %@)", @(OS_STRINGIFY(TWEAK_VERSION))]);
