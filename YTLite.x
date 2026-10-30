@@ -245,12 +245,17 @@ static void ytlScanAndCacheImages(NSData *data) {
 
 // YouTube-X (https://github.com/PoomSmart/YouTube-X/)
 // Background Playback
+// Turning the toggle OFF must mean "don't intervene", not "force NO". These used to return a
+// hard NO in the off case, so the setting never restored YouTube's own answer -- it inverted it,
+// and could suppress background playback that the server actually allowed. It also made a clean
+// A/B impossible: "off" was still us overriding, so there was no way to compare against stock.
+// %orig gives a real control, which is what the black-PiP investigation needs.
 %hook YTIPlayabilityStatus
-- (BOOL)isPlayableInBackground { return ytlBool(@"backgroundPlayback") ? YES : NO; }
+- (BOOL)isPlayableInBackground { return ytlBool(@"backgroundPlayback") ? YES : %orig; }
 %end
 
 %hook MLVideo
-- (BOOL)playableInBackground { return ytlBool(@"backgroundPlayback") ? YES : NO; }
+- (BOOL)playableInBackground { return ytlBool(@"backgroundPlayback") ? YES : %orig; }
 %end
 
 // PiP re-entry bug diagnostic. YouTube's PiP (MLPIPController, MediaLibrary layer) is inconsistent
@@ -416,14 +421,34 @@ static void ytlPipRearm(MLPIPController *pip, NSString *reason) {
 // ytlSafeValueForKey so a renamed ivar degrades to "-" instead of aborting the app.
 static NSString *ytlPipLayerState(MLPIPController *pip) {
     if (!pip) return @"(no controller)";
-    id av    = ytlSafeValueForKey(pip, @"AVPlayerView", @"pipDiagLog", YTL_SITE);
-    id ham   = ytlSafeValueForKey(pip, @"HAMPlayerView", @"pipDiagLog", YTL_SITE);
-    id avpc  = ytlSafeValueForKey(pip, @"pictureInPictureController", @"pipDiagLog", YTL_SITE);
-    id ready = av ? ytlSafeValueForKey(av, @"readyForDisplay", @"pipDiagLog", YTL_SITE) : nil;
-    id playr = av ? ytlSafeValueForKey(av, @"player", @"pipDiagLog", YTL_SITE) : nil;
-    id layer = av ? ytlSafeValueForKey(av, @"playerLayer", @"pipDiagLog", YTL_SITE) : nil;
-    return [NSString stringWithFormat:@"av=%p ham=%p avpc=%p ready=%@ player=%p layer=%p",
-            (void *)av, (void *)ham, (void *)avpc, ready ?: @"-", (void *)playr, (void *)layer];
+    id av   = ytlSafeValueForKey(pip, @"AVPlayerView", @"pipDiagLog", YTL_SITE);
+    id ham  = ytlSafeValueForKey(pip, @"HAMPlayerView", @"pipDiagLog", YTL_SITE);
+    id avpc = ytlSafeValueForKey(pip, @"pictureInPictureController", @"pipDiagLog", YTL_SITE);
+
+    // 4.8.5 read readyForDisplay off the AVPlayer view -- which is nil on every single one of the
+    // 87 observations taken on 21.36.6, so the field printed "-" always and told us nothing. The
+    // live path is HAM: HAMSBDLSampleBufferRenderingViewProtocol exposes readyForDisplay,
+    // displayLayer (an AVSampleBufferDisplayLayer) and videoRect, and THAT is where a black PiP
+    // shows up -- the window is alive while the layer behind it has nothing to draw.
+    id hReady = ham ? ytlSafeValueForKey(ham, @"readyForDisplay", @"pipDiagLog", YTL_SITE) : nil;
+    id hLayer = ham ? ytlSafeValueForKey(ham, @"displayLayer",    @"pipDiagLog", YTL_SITE) : nil;
+    id hRect  = ham ? ytlSafeValueForKey(ham, @"videoRect",       @"pipDiagLog", YTL_SITE) : nil;
+    CGRect vr = CGRectZero;
+    if ([hRect isKindOfClass:[NSValue class]]) vr = [(NSValue *)hRect CGRectValue];
+
+    // Controller-side state. contentSourceNeedsRefresh is the candidate left standing after the
+    // view-binding theory died (ham/avpc pointers never change -- 73/73 identical across eight
+    // re-navigations), so a stale CONTENT SOURCE is the remaining way the window can outlive
+    // what feeds it. inApp distinguishes the in-app window from system PiP; prohibitsBgAudio is
+    // the one place our backgroundPlayback hook could reach this subsystem.
+    id inApp  = ytlSafeValueForKey(pip, @"inAppPictureInPictureActive",    @"pipDiagLog", YTL_SITE);
+    id prohib = ytlSafeValueForKey(pip, @"prohibitsBackgroundAudioPlayback", @"pipDiagLog", YTL_SITE);
+    id srcRef = ytlSafeValueForKey(pip, @"contentSourceNeedsRefresh",      @"pipDiagLog", YTL_SITE);
+
+    return [NSString stringWithFormat:
+        @"av=%p ham=%p avpc=%p hamReady=%@ hamLayer=%p hamRect=%.0fx%.0f inApp=%@ prohibitBgAudio=%@ srcNeedsRefresh=%@",
+        (void *)av, (void *)ham, (void *)avpc, hReady ?: @"-", (void *)hLayer,
+        vr.size.width, vr.size.height, inApp ?: @"-", prohib ?: @"-", srcRef ?: @"-"];
 }
 
 // Force-start PiP on demand, synchronously.
