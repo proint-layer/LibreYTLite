@@ -72,6 +72,13 @@ def stats(png, box):
 
 if __name__ == "__main__":
     png = sys.argv[1]
+    # An absent or truncated capture must FAIL, never read as "ok". A WDA runner that dies
+    # mid-hunt writes 0-byte PNGs; sips then produces nothing, every check errors, and the run
+    # reports "0 BLACK" for cycles where nothing was measured at all. That is a false negative
+    # dressed as a clean result -- exactly the shape that makes a harness worse than no harness.
+    if not os.path.exists(png) or os.path.getsize(png) < 1024:
+        print("%-28s UNUSABLE (missing/empty capture -- is WDA up?)" % os.path.basename(png))
+        sys.exit(2)
     # Default band sits BELOW the PiP transport buttons and ABOVE the scrubber, so the window's
     # own chrome (a bright white scrubber, grey glyphs) can't manufacture variance. Calibrated
     # against a known-black capture (mean 1.1 / var 20) and two good ones (mean 88-106, var 1257+).
