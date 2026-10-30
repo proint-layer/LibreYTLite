@@ -265,6 +265,9 @@ static void ytlPipEvent(NSString *event);
 - (BOOL)pictureInPicturePossible;
 - (BOOL)pictureInPictureActive;
 - (void)activatePiPController;
+// The in-app PiP button's entry point. Verified present on MLPIPControllerImpl in 21.36.6 with
+// `ipsw class-dump --class '^MLPIPControllerImpl$'` -- not assumed from the fact that we hook it.
+- (void)startPictureInPictureWithPaused:(BOOL)paused;
 @end
 // YouTube renamed this class MLPIPController -> MLPIPControllerImpl in 21.31.x. Declaring the new
 // name as a (compile-time) subclass of the old lets ONE set of types + selector decls cover both,
@@ -283,6 +286,10 @@ static __weak MLPIPController *gYTLPipController;
 // PiP, so activating a second controller can hand it the slot with no ready layer behind it. That
 // is a PiP window which is present but black, i.e. the reported symptom.
 static __weak MLPIPController *gYTLPipLive;
+
+// Defined below the hook block (it needs nothing from here), but the hooks log it -- so declare it
+// up front rather than reordering the file around one call.
+static NSString *ytlPipLayerState(MLPIPController *pip);
 
 // FIX for the intermittent PiP re-entry failure. After a foreground display-layer recreation
 // YouTube leaves its PiP controller on a not-yet-ready layer, so pictureInPicturePossible sticks at
@@ -392,7 +399,7 @@ static void ytlPipRearm(MLPIPController *pip, NSString *reason) {
 // matters as much as setting it: willStart fires first, so a failed start would otherwise leave a
 // stale "owner" behind and block every later re-arm.
 - (void)pictureInPictureControllerWillStartPictureInPicture:(id)c { gYTLPipLive = self; ytlPipEvent([NSString stringWithFormat:@"willStart possible=%d pip=%p", [self pictureInPicturePossible], (void *)self]); %orig; }
-- (void)pictureInPictureControllerDidStartPictureInPicture:(id)c { gYTLPipLive = self; ytlPipEvent([NSString stringWithFormat:@"didStart pip=%p", (void *)self]); %orig; }
+- (void)pictureInPictureControllerDidStartPictureInPicture:(id)c { gYTLPipLive = self; ytlPipEvent([NSString stringWithFormat:@"didStart pip=%p %@", (void *)self, ytlPipLayerState(self)]); %orig; }
 - (void)pictureInPictureControllerDidStopPictureInPicture:(id)c  { if (gYTLPipLive == self) gYTLPipLive = nil; ytlPipEvent([NSString stringWithFormat:@"didStop (possible=%d) pip=%p", [self pictureInPicturePossible], (void *)self]); %orig; }
 - (void)pictureInPictureController:(id)c failedToStartPictureInPictureWithError:(id)error { if (gYTLPipLive == self) gYTLPipLive = nil; ytlPipEvent([NSString stringWithFormat:@"FAILED %@ pip=%p", error, (void *)self]); %orig; }
 - (void)pictureInPictureControllerWillStopPictureInPicture:(id)c { ytlPipEvent(@"willStop"); %orig; }
@@ -400,6 +407,54 @@ static void ytlPipRearm(MLPIPController *pip, NSString *reason) {
     ytlPipEvent([NSString stringWithFormat:@"restoreUI (possible=%d)", [self pictureInPicturePossible]]); %orig;
 }
 %end
+
+// What is actually BEHIND the PiP window. A black PiP is "PiP is active but its layer or player
+// is gone", and none of the callbacks above can tell those apart -- they only ever reported
+// possible/active, which stay 1 while the picture is black. MLPIPControllerImpl holds two render
+// paths (AVPlayer via MLAVPIPPlayerLayerView, and the HAM sample-buffer view) plus the AVKit
+// controller; every field below was confirmed by class-dump on 21.36.6. Read through
+// ytlSafeValueForKey so a renamed ivar degrades to "-" instead of aborting the app.
+static NSString *ytlPipLayerState(MLPIPController *pip) {
+    if (!pip) return @"(no controller)";
+    id av    = ytlSafeValueForKey(pip, @"AVPlayerView", @"pipDiagLog", YTL_SITE);
+    id ham   = ytlSafeValueForKey(pip, @"HAMPlayerView", @"pipDiagLog", YTL_SITE);
+    id avpc  = ytlSafeValueForKey(pip, @"pictureInPictureController", @"pipDiagLog", YTL_SITE);
+    id ready = av ? ytlSafeValueForKey(av, @"readyForDisplay", @"pipDiagLog", YTL_SITE) : nil;
+    id playr = av ? ytlSafeValueForKey(av, @"player", @"pipDiagLog", YTL_SITE) : nil;
+    id layer = av ? ytlSafeValueForKey(av, @"playerLayer", @"pipDiagLog", YTL_SITE) : nil;
+    return [NSString stringWithFormat:@"av=%p ham=%p avpc=%p ready=%@ player=%p layer=%p",
+            (void *)av, (void *)ham, (void *)avpc, ready ?: @"-", (void *)playr, (void *)layer];
+}
+
+// Force-start PiP on demand, synchronously.
+//
+// WHY THIS EXISTS: auto-PiP -- the home-swipe path the user's bug happens on -- cannot be driven
+// from any automation available here. WDA's wda/deactivateApp, a real HID home press via
+// POST /wda/homescreen, and a genuine app switch (launching another app with devicectl) ALL leave
+// `possible=0 active=0` at background with zero didStart, while a human swipe arms it every time
+// (`activate possible=1 -> willStart -> didStart`). That made an intermittent bug untestable.
+//
+// So skip the heuristics: call YouTube's OWN in-app PiP entry point, the selector behind its
+// in-app PiP button, which starts PiP directly from the foreground. Trigger it with
+//   xcrun devicectl device process launch --device <udid> --payload-url "libreyt://pip" --activate <bundle>
+// then background the app however you like and watch the log.
+static void ytlStartPiPNow(void) {
+    MLPIPController *pip = gYTLPipLive ?: gYTLPipController;
+    if (!pip) { ytlPipEvent(@"pip-now: no controller (play a video first)"); return; }
+    @try {
+        ytlPipEvent([NSString stringWithFormat:@"pip-now: requesting (possible=%d active=%d pip=%p) %@",
+                     [pip pictureInPicturePossible], [pip pictureInPictureActive],
+                     (void *)pip, ytlPipLayerState(pip)]);
+        // activatePiPController is what the layer needs before a start can take; it is a no-op
+        // when PiP is already possible, which is exactly how the re-arm uses it too.
+        if (![pip pictureInPicturePossible]) [pip activatePiPController];
+        [pip startPictureInPictureWithPaused:NO];
+        ytlPipEvent([NSString stringWithFormat:@"pip-now: requested (possible=%d active=%d)",
+                     [pip pictureInPicturePossible], [pip pictureInPictureActive]]);
+    } @catch (__unused id e) {
+        ytlPipEvent(@"pip-now: threw");
+    }
+}
 
 // Kill ads. Video ads live on the player response, and they ride THREE
 // separate arrays -- not one. We used to empty only playerAdsArray and the
@@ -826,6 +881,13 @@ static NSString *ytlVideoIDFromLibreURL(NSURL *url) {
 - (BOOL)application:(UIApplication *)application openURL:(NSURL *)url sourceApplication:(NSString *)sourceApplication annotation:(id)annotation {
     YTLDBG(@"openURL(legacy): scheme=%@ url=%@", url.scheme, url.absoluteString);
     if ([url.scheme.lowercaseString isEqualToString:@"libreyt"]) {
+        // libreyt://pip -- force-start PiP on the current player. Must be checked BEFORE
+        // ytlVideoIDFromLibreURL, whose last resort is "treat the host as a video id" and would
+        // happily try to play a video called "pip".
+        if ([url.host.lowercaseString isEqualToString:@"pip"]) {
+            ytlStartPiPNow();
+            return YES;
+        }
         NSString *vid = ytlVideoIDFromLibreURL(url);
         if (vid.length) {
             // Drive the app's UNIVERSAL-LINK path (the same handler a real youtube.com tap uses), which
