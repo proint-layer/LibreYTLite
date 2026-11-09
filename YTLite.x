@@ -295,6 +295,9 @@ static __weak MLPIPController *gYTLPipLive;
 // Defined below the hook block (it needs nothing from here), but the hooks log it -- so declare it
 // up front rather than reordering the file around one call.
 static NSString *ytlPipLayerState(MLPIPController *pip);
+static NSString *ytlPipLayerHealth(MLPIPController *pip);
+static void ytlPipWatchStart(MLPIPController *pip);
+static void ytlPipWatchStop(NSString *why);
 
 // FIX for the intermittent PiP re-entry failure. After a foreground display-layer recreation
 // YouTube leaves its PiP controller on a not-yet-ready layer, so pictureInPicturePossible sticks at
@@ -403,10 +406,10 @@ static void ytlPipRearm(MLPIPController *pip, NSString *reason) {
 // which is why gYTLPipLive is maintained here and nowhere else. Clearing it on failedToStart
 // matters as much as setting it: willStart fires first, so a failed start would otherwise leave a
 // stale "owner" behind and block every later re-arm.
-- (void)pictureInPictureControllerWillStartPictureInPicture:(id)c { gYTLPipLive = self; ytlPipEvent([NSString stringWithFormat:@"willStart possible=%d pip=%p", [self pictureInPicturePossible], (void *)self]); %orig; }
-- (void)pictureInPictureControllerDidStartPictureInPicture:(id)c { gYTLPipLive = self; ytlPipEvent([NSString stringWithFormat:@"didStart pip=%p %@", (void *)self, ytlPipLayerState(self)]); %orig; }
-- (void)pictureInPictureControllerDidStopPictureInPicture:(id)c  { if (gYTLPipLive == self) gYTLPipLive = nil; ytlPipEvent([NSString stringWithFormat:@"didStop (possible=%d) pip=%p", [self pictureInPicturePossible], (void *)self]); %orig; }
-- (void)pictureInPictureController:(id)c failedToStartPictureInPictureWithError:(id)error { if (gYTLPipLive == self) gYTLPipLive = nil; ytlPipEvent([NSString stringWithFormat:@"FAILED %@ pip=%p", error, (void *)self]); %orig; }
+- (void)pictureInPictureControllerWillStartPictureInPicture:(id)c { gYTLPipLive = self; ytlPipEvent([NSString stringWithFormat:@"willStart possible=%d pip=%p %@", [self pictureInPicturePossible], (void *)self, ytlPipLayerHealth(self)]); %orig; }
+- (void)pictureInPictureControllerDidStartPictureInPicture:(id)c { gYTLPipLive = self; ytlPipEvent([NSString stringWithFormat:@"didStart pip=%p %@", (void *)self, ytlPipLayerState(self)]); ytlPipWatchStart(self); %orig; }
+- (void)pictureInPictureControllerDidStopPictureInPicture:(id)c  { if (gYTLPipLive == self) gYTLPipLive = nil; ytlPipWatchStop(@"didStop"); ytlPipEvent([NSString stringWithFormat:@"didStop (possible=%d) pip=%p", [self pictureInPicturePossible], (void *)self]); %orig; }
+- (void)pictureInPictureController:(id)c failedToStartPictureInPictureWithError:(id)error { if (gYTLPipLive == self) gYTLPipLive = nil; ytlPipWatchStop(@"failed"); ytlPipEvent([NSString stringWithFormat:@"FAILED %@ pip=%p", error, (void *)self]); %orig; }
 - (void)pictureInPictureControllerWillStopPictureInPicture:(id)c { ytlPipEvent(@"willStop"); %orig; }
 - (void)pictureInPictureController:(id)c restoreUserInterfaceForPictureInPictureStopWithCompletionHandler:(id)handler {
     ytlPipEvent([NSString stringWithFormat:@"restoreUI (possible=%d)", [self pictureInPicturePossible]]); %orig;
@@ -430,8 +433,6 @@ static NSString *ytlPipLayerState(MLPIPController *pip) {
     // live path is HAM: HAMSBDLSampleBufferRenderingViewProtocol exposes readyForDisplay,
     // displayLayer (an AVSampleBufferDisplayLayer) and videoRect, and THAT is where a black PiP
     // shows up -- the window is alive while the layer behind it has nothing to draw.
-    id hReady = ham ? ytlSafeValueForKey(ham, @"readyForDisplay", @"pipDiagLog", YTL_SITE) : nil;
-    id hLayer = ham ? ytlSafeValueForKey(ham, @"displayLayer",    @"pipDiagLog", YTL_SITE) : nil;
     id hRect  = ham ? ytlSafeValueForKey(ham, @"videoRect",       @"pipDiagLog", YTL_SITE) : nil;
     CGRect vr = CGRectZero;
     if ([hRect isKindOfClass:[NSValue class]]) vr = [(NSValue *)hRect CGRectValue];
@@ -443,12 +444,117 @@ static NSString *ytlPipLayerState(MLPIPController *pip) {
     // the one place our backgroundPlayback hook could reach this subsystem.
     id inApp  = ytlSafeValueForKey(pip, @"inAppPictureInPictureActive",    @"pipDiagLog", YTL_SITE);
     id prohib = ytlSafeValueForKey(pip, @"prohibitsBackgroundAudioPlayback", @"pipDiagLog", YTL_SITE);
-    id srcRef = ytlSafeValueForKey(pip, @"contentSourceNeedsRefresh",      @"pipDiagLog", YTL_SITE);
 
+    // Structural fields only. Everything that can CHANGE while the window is up moved into
+    // ytlPipLayerHealth, so the one-shot didStart line and the repeating watch below cannot
+    // drift apart and report the same condition two different ways.
     return [NSString stringWithFormat:
-        @"av=%p ham=%p avpc=%p hamReady=%@ hamLayer=%p hamRect=%.0fx%.0f inApp=%@ prohibitBgAudio=%@ srcNeedsRefresh=%@",
-        (void *)av, (void *)ham, (void *)avpc, hReady ?: @"-", (void *)hLayer,
-        vr.size.width, vr.size.height, inApp ?: @"-", prohib ?: @"-", srcRef ?: @"-"];
+        @"av=%p ham=%p avpc=%p hamRect=%.0fx%.0f inApp=%@ prohibitBgAudio=%@ %@",
+        (void *)av, (void *)ham, (void *)avpc,
+        vr.size.width, vr.size.height, inApp ?: @"-", prohib ?: @"-", ytlPipLayerHealth(pip)];
+}
+
+// The VOLATILE half of the PiP picture: everything that can change underneath a window that is
+// already up. Split out of ytlPipLayerState for the watch below.
+//
+// WHY THESE FIELDS: a frozen PiP (last frame stuck, audio still playing) and a black PiP are the
+// same failure seen at two different moments -- the AVSampleBufferDisplayLayer behind the window
+// stopped being fed. AVFoundation says exactly how that presents: `status` goes Failed with
+// `error` set, or `requiresFlushToResumeDecoding` latches YES (the decoder was torn down on a
+// background transition and the layer will show its last frame forever until somebody calls
+// -flush). Neither is reachable from `possible`/`active`, which stay 1 the whole time -- which is
+// why two days of logging those two numbers explained nothing.
+static NSString *ytlPipLayerHealth(MLPIPController *pip) {
+    if (!pip) return @"(no controller)";
+    id ham    = ytlSafeValueForKey(pip, @"HAMPlayerView", @"pipDiagLog", YTL_SITE);
+    id hReady = ham ? ytlSafeValueForKey(ham, @"readyForDisplay", @"pipDiagLog", YTL_SITE) : nil;
+    id hLayer = ham ? ytlSafeValueForKey(ham, @"displayLayer",    @"pipDiagLog", YTL_SITE) : nil;
+    // Read through KVC, not the typed property: we build against the 16.5 SDK and these are read
+    // off whatever concrete layer YouTube hands us, so a rename degrades to "-" instead of a crash.
+    id st  = hLayer ? ytlSafeValueForKey(hLayer, @"status",                        @"pipDiagLog", YTL_SITE) : nil;
+    id fl  = hLayer ? ytlSafeValueForKey(hLayer, @"requiresFlushToResumeDecoding", @"pipDiagLog", YTL_SITE) : nil;
+    id rm  = hLayer ? ytlSafeValueForKey(hLayer, @"readyForMoreMediaData",         @"pipDiagLog", YTL_SITE) : nil;
+    id er  = hLayer ? ytlSafeValueForKey(hLayer, @"error",                         @"pipDiagLog", YTL_SITE) : nil;
+    id src = ytlSafeValueForKey(pip, @"contentSourceNeedsRefresh", @"pipDiagLog", YTL_SITE);
+    return [NSString stringWithFormat:
+        @"hamReady=%@ hamLayer=%p status=%@ needsFlush=%@ readyForMore=%@ srcNeedsRefresh=%@%@",
+        hReady ?: @"-", (void *)hLayer, st ?: @"-", fl ?: @"-", rm ?: @"-", src ?: @"-",
+        er ? [NSString stringWithFormat:@" ERR=%@", er] : @""];
+}
+
+// Watch the layer FOR THE LIFE OF THE WINDOW, not just at didStart.
+//
+// This exists because of a measurement failure, and the failure is worth recording. The black-PiP
+// hunt sampled state once, at didStart, and judged the result with a screenshot oracle that only
+// recognises BLACK (flat and dark). A frozen frame is a normal bright picture, so the oracle
+// scored every freeze as "ok" and 57 runs produced one usable data point. Both halves were blind
+// to the actual symptom. Sampling on a timer and logging only on CHANGE gives the one thing the
+// one-shot could never give: the moment the layer went bad, and what flipped when it did.
+//
+// One PiP can exist at a time, so one static watch is enough; the generation counter is what stops
+// a stale chain from a previous session logging over the current one.
+static __weak MLPIPController *gYTLPipWatchTarget;
+static uint32_t gYTLPipWatchGen;
+static NSString *gYTLPipWatchPrev;
+static NSUInteger gYTLPipWatchN;
+static const NSTimeInterval kYTLPipWatchInterval = 2.0;
+
+static void ytlPipWatchFire(uint32_t gen);
+
+static void ytlPipWatchSchedule(uint32_t gen) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kYTLPipWatchInterval * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ ytlPipWatchFire(gen); });
+}
+
+static void ytlPipWatchFire(uint32_t gen) {
+    if (gen != gYTLPipWatchGen) return;               // a newer session owns the watch
+    MLPIPController *s = gYTLPipWatchTarget;
+    if (!s) { ytlPipEvent(@"watch: controller deallocated"); return; }
+    @try {
+        if (![s pictureInPictureActive]) { ytlPipEvent(@"watch: PiP no longer active -- stopping"); return; }
+        gYTLPipWatchN++;
+        NSString *sig = ytlPipLayerHealth(s);
+        double age = (double)gYTLPipWatchN * kYTLPipWatchInterval;
+        if (!gYTLPipWatchPrev) {
+            ytlPipEvent([NSString stringWithFormat:@"watch t+%.0fs first   %@", age, sig]);
+            gYTLPipWatchPrev = sig;
+        } else if (![sig isEqualToString:gYTLPipWatchPrev]) {
+            ytlPipEvent([NSString stringWithFormat:@"watch t+%.0fs CHANGED %@", age, sig]);
+            gYTLPipWatchPrev = sig;
+        } else if (gYTLPipWatchN % 15 == 0) {         // heartbeat every 30s so a silent log still proves the watch ran
+            ytlPipEvent([NSString stringWithFormat:@"watch t+%.0fs steady  %@", age, sig]);
+        }
+    } @catch (__unused id e) {}
+    ytlPipWatchSchedule(gen);
+}
+
+static void ytlPipWatchStart(MLPIPController *pip) {
+    if (!ytlBool(@"pipDiagLog") || !pip) return;
+    gYTLPipWatchTarget = pip;
+    gYTLPipWatchN = 0;
+    // Sample at t+0 rather than waiting for the first tick, and SAY SO when the window came up on
+    // a layer that is not ready to draw. That is the whole bug in one line: hamReady=0 here means
+    // PiP is showing whatever stale frame the layer still held when the app was backgrounded --
+    // the "video froze but audio kept playing" report. Seen once in 18 sessions (11-08 12:01:34),
+    // on a foreground-then-immediately-swipe-home, and invisible to every earlier probe because
+    // possible/active both read 1 throughout. The ticks that follow answer the next question:
+    // does the layer recover on its own, or stay stuck for the life of the window?
+    gYTLPipWatchPrev = ytlPipLayerHealth(pip);
+    // Sniffing the formatted string keeps ONE reader of the ivar; re-reading it here could
+    // legitimately return a different value and make the verdict disagree with the line it prints.
+    BOOL degraded = [gYTLPipWatchPrev containsString:@"hamReady=0"];
+    ytlPipEvent([NSString stringWithFormat:@"watch t+0s  %@ %@",
+                 degraded ? @"DEGRADED-START -- layer not ready, expect a frozen/black window" : @"start  ",
+                 gYTLPipWatchPrev]);
+    ytlPipWatchSchedule(++gYTLPipWatchGen);
+}
+
+static void ytlPipWatchStop(NSString *why) {
+    if (!gYTLPipWatchTarget) return;
+    ytlPipEvent([NSString stringWithFormat:@"watch: stopped (%@) after %lu samples", why, (unsigned long)gYTLPipWatchN]);
+    gYTLPipWatchGen++;                                 // invalidates any in-flight dispatch_after
+    gYTLPipWatchTarget = nil;
+    gYTLPipWatchPrev = nil;
 }
 
 // Force-start PiP on demand, synchronously.
