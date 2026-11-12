@@ -298,12 +298,29 @@ static NSString *ytlPipLayerState(MLPIPController *pip);
 static NSString *ytlPipLayerHealth(MLPIPController *pip);
 static void ytlPipWatchStart(MLPIPController *pip);
 static void ytlPipWatchStop(NSString *why);
+static BOOL ytlPipLayerCold(MLPIPController *pip);
 
 // FIX for the intermittent PiP re-entry failure. After a foreground display-layer recreation
 // YouTube leaves its PiP controller on a not-yet-ready layer, so pictureInPicturePossible sticks at
 // 0 and the next home swipe's auto-PiP silently fails -- until the layer becomes readyForDisplay a
 // beat later (why "fail, return, retry" works). This gives it that beat and re-arms YouTube's OWN
-// controller if still stuck. Called both after recreateDisplayLayer AND on every app foreground (the
+// controller once the layer can actually draw.
+//
+// READ THIS BEFORE LOOSENING THE GUARD BELOW. As first written, this fix armed the controller
+// WITHOUT looking at the layer -- which was its stated purpose: force possible=1 even though the
+// layer is not ready yet. That is precisely how a black PiP is made. Captured on 11-12 with the
+// 4.8.7 watch:
+//
+//   14:53:49.838  re-arm #1 (active=0 possible=0)      <- layer status=0, never fed a frame
+//   14:53:49.840  after re-arm #1 possible=1           <- WE armed a controller with no content
+//   14:55:02.842  APP -> background (home swipe)
+//   14:55:03.173  willStart ... hamReady=0 status=0    <- auto-PiP fires because possible=1
+//   14:55:04.205  didStart  ... hamReady=0 status=0    <- black window
+//   14:56:34.392  watch t+90s steady hamReady=0        <- and it NEVER recovers
+//
+// So arming early does not buy a beat, it buys a dead window: "auto-PiP silently fails" (harmless,
+// retryable) becomes "auto-PiP starts black" (stuck for the life of the window). The retries are
+// still the right shape -- wait for the layer, THEN arm -- but the waiting has to be real. Called both after recreateDisplayLayer AND on every app foreground (the
 // user's manual "return and retry", automated -- covers the slower bg-playback-on recovery too).
 // Low-risk: no AVPiPController re-creation, just bounded, guarded re-calls of activatePiPController,
 // each a no-op the instant PiP is possible/active. If the log shows possible stays 0 through all
@@ -354,9 +371,12 @@ static void ytlPipRearm(MLPIPController *pip, NSString *reason) {
         return;
     }
     lastSchedule = now;
-    ytlPipEvent([NSString stringWithFormat:@"reentry-fix: scheduled x4 (%@) target=%p", reason, (void *)pip]);
+    ytlPipEvent([NSString stringWithFormat:@"reentry-fix: scheduled x8 (%@) target=%p", reason, (void *)pip]);
     __weak MLPIPController *weak = pip;
-    for (int attempt = 1; attempt <= 4; attempt++) {
+    // 8 x 0.6s = 4.8s. The old 4 attempts covered 2.4s, which was fine when we armed
+    // regardless; now that a cold layer makes us HOLD, the window has to outlast the warm-up --
+    // tools/pipcold.sh measured a layer going ready at ~4.0s after a cold foreground.
+    for (int attempt = 1; attempt <= 8; attempt++) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * attempt * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             MLPIPController *s = weak;
             if (!s) { ytlPipEvent([NSString stringWithFormat:@"reentry-fix: #%d controller gone", attempt]); return; }
@@ -371,6 +391,16 @@ static void ytlPipRearm(MLPIPController *pip, NSString *reason) {
                 // re-arm ever lands on a live PiP.
                 if (act || poss) {
                     ytlPipEvent([NSString stringWithFormat:@"reentry-fix: skip #%d (active=%d possible=%d)", attempt, act, poss]);
+                    return;
+                }
+                // Arm only a layer that can draw. status=0 (nothing ever enqueued) AND
+                // readyForDisplay=0 is the exact state behind every black window we have
+                // captured, and 10/10 healthy starts had status=1. ytlPipLayerCold is positive-
+                // evidence-only: if the fields cannot be read it returns NO and we behave as
+                // before, so a YouTube rename degrades to the old behaviour, not to no fix.
+                if (ytlPipLayerCold(s)) {
+                    ytlPipEvent([NSString stringWithFormat:
+                        @"reentry-fix: HOLD #%d -- layer cold (nothing enqueued); arming it would make a black PiP", attempt]);
                     return;
                 }
                 ytlPipEvent([NSString stringWithFormat:@"reentry-fix: re-arm #%d (active=0 possible=0)", attempt]);
@@ -480,6 +510,31 @@ static NSString *ytlPipLayerHealth(MLPIPController *pip) {
         @"hamReady=%@ hamLayer=%p status=%@ needsFlush=%@ readyForMore=%@ srcNeedsRefresh=%@%@",
         hReady ?: @"-", (void *)hLayer, st ?: @"-", fl ?: @"-", rm ?: @"-", src ?: @"-",
         er ? [NSString stringWithFormat:@" ERR=%@", er] : @""];
+}
+
+// Can we prove the layer has never been fed? POSITIVE EVIDENCE ONLY -- every unreadable field
+// returns NO (= "not provably cold"), so this can only ever narrow what ytlPipRearm does, never
+// disable the fix outright if YouTube renames something.
+//
+// status is AVQueuedSampleBufferRenderingStatus: 0=Unknown (nothing enqueued yet), 1=Rendering,
+// 2=Failed. Across 12 observed PiP starts the split was total -- 10 healthy at hamReady=1
+// status=1, 2 black at hamReady=0 status=0 -- so both being 0 is the signature, and requiring
+// BOTH keeps us from holding off on a layer that is merely between frames.
+//
+// NOTE needsFlush (requiresFlushToResumeDecoding) read 0 in both black cases, so the textbook
+// "layer stalled, call -flush" remedy does NOT apply here and was never shipped. readyForMore
+// read 1: the layer is willing to take frames and nobody is sending any. The producer is the
+// broken side, not the layer.
+static BOOL ytlPipLayerCold(MLPIPController *pip) {
+    if (!pip) return NO;
+    id ham = ytlSafeValueForKey(pip, @"HAMPlayerView", @"pipDiagLog", YTL_SITE);
+    if (!ham) return NO;
+    id ready = ytlSafeValueForKey(ham, @"readyForDisplay", @"pipDiagLog", YTL_SITE);
+    id layer = ytlSafeValueForKey(ham, @"displayLayer",    @"pipDiagLog", YTL_SITE);
+    if (!ready || !layer) return NO;
+    id st = ytlSafeValueForKey(layer, @"status", @"pipDiagLog", YTL_SITE);
+    if (!st) return NO;
+    return ([ready intValue] == 0 && [st intValue] == 0);
 }
 
 // Watch the layer FOR THE LIFE OF THE WINDOW, not just at didStart.
